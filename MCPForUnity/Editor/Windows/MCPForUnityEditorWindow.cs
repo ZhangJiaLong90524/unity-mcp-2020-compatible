@@ -4,7 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using UnityEditor;
-using UnityEditor.UIElements; // For Unity 2021 compatibility
+using UnityEditor.UIElements; // For Unity 2020+ UI Toolkit support
 using UnityEngine;
 using UnityEngine.UIElements;
 using MCPForUnity.Editor.Data;
@@ -54,7 +54,7 @@ namespace MCPForUnity.Editor.Windows
         private Button rebuildServerButton;
 
         // Client UI Elements
-        private DropdownField clientDropdown;
+        private PopupField<string> clientDropdown;
         private Button configureAllButton;
         private VisualElement clientStatusIndicator;
         private Label clientStatusLabel;
@@ -71,7 +71,7 @@ namespace MCPForUnity.Editor.Windows
         private Label installationStepsLabel;
 
         // Data
-        private readonly McpClients mcpClients = new();
+        private readonly McpClients mcpClients = new McpClients();
         private int selectedClientIndex = 0;
         private ValidationLevel currentValidationLevel = ValidationLevel.Standard;
 
@@ -148,11 +148,8 @@ namespace MCPForUnity.Editor.Windows
 
         private void OnFocus()
         {
-            // Only refresh data if UI is built
-            if (rootVisualElement == null || rootVisualElement.childCount == 0)
-                return;
-
-            RefreshAllData();
+            // Removed auto-refresh on focus to prevent UI freezing
+            // Users can manually refresh using the Test button or by reconnecting
         }
 
         private void OnEditorUpdate()
@@ -221,8 +218,26 @@ namespace MCPForUnity.Editor.Windows
             downloadServerButton = rootVisualElement.Q<Button>("download-server-button");
             rebuildServerButton = rootVisualElement.Q<Button>("rebuild-server-button");
 
-            // Client
-            clientDropdown = rootVisualElement.Q<DropdownField>("client-dropdown");
+            // Client - Get container, PopupField will be created dynamically
+            var clientDropdownContainer = rootVisualElement.Q<VisualElement>("client-dropdown-container");
+
+            if (clientDropdownContainer == null)
+            {
+                McpLog.Error("client-dropdown-container not found in UXML");
+            }
+            else
+            {
+                // Create PopupField dynamically (Unity 2020 compatible approach)
+                var clientNames = mcpClients.clients.Select(c => c.name).ToList();
+                if (clientNames.Count == 0)
+                {
+                    clientNames.Add("No clients configured");
+                }
+                clientDropdown = new PopupField<string>(clientNames, 0);
+                clientDropdown.name = "client-dropdown";
+                clientDropdownContainer.Add(clientDropdown);
+            }
+
             configureAllButton = rootVisualElement.Q<Button>("configure-all-button");
             clientStatusIndicator = rootVisualElement.Q<VisualElement>("client-status-indicator");
             clientStatusLabel = rootVisualElement.Q<Label>("client-status");
@@ -261,10 +276,9 @@ namespace MCPForUnity.Editor.Windows
             unityPortField.value = MCPServiceLocator.Bridge.CurrentPort.ToString();
             serverPortField.value = "6500";
 
-            // Client Configuration
-            var clientNames = mcpClients.clients.Select(c => c.name).ToList();
-            clientDropdown.choices = clientNames;
-            if (clientNames.Count > 0)
+            // Client Configuration - PopupField already initialized in CacheUIElements with choices
+            // Just ensure the index is set
+            if (clientDropdown != null && clientDropdown.choices != null && clientDropdown.choices.Count > 0)
             {
                 clientDropdown.index = 0;
             }
@@ -304,13 +318,16 @@ namespace MCPForUnity.Editor.Windows
             rebuildServerButton.clicked += OnRebuildServerClicked;
 
             // Client callbacks
-            clientDropdown.RegisterValueChangedCallback(evt =>
+            if (clientDropdown != null)
             {
-                selectedClientIndex = clientDropdown.index;
-                UpdateClientStatus();
-                UpdateManualConfiguration();
-                UpdateClaudeCliPathVisibility();
-            });
+                clientDropdown.RegisterValueChangedCallback(evt =>
+                {
+                    selectedClientIndex = clientDropdown.index;
+                    UpdateClientStatus();
+                    UpdateManualConfiguration();
+                    UpdateClaudeCliPathVisibility();
+                });
+            }
 
             configureAllButton.clicked += OnConfigureAllClientsClicked;
             configureButton.clicked += OnConfigureClicked;

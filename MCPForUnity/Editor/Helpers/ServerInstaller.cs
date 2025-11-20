@@ -918,7 +918,37 @@ namespace MCPForUnity.Editor.Helpers
 
                 try
                 {
-                    ZipFile.ExtractToDirectory(tempZip, tempExtractDir);
+                    // Unity 2020 compatible: Use ZipArchive manually
+                    using (FileStream zipStream = new FileStream(tempZip, FileMode.Open, FileAccess.Read))
+                    using (ZipArchive archive = new ZipArchive(zipStream, ZipArchiveMode.Read))
+                    {
+                        foreach (ZipArchiveEntry entry in archive.Entries)
+                        {
+                            string destinationPath = Path.Combine(tempExtractDir, entry.FullName);
+
+                            // Create directory if entry is a directory
+                            if (string.IsNullOrEmpty(entry.Name))
+                            {
+                                Directory.CreateDirectory(destinationPath);
+                            }
+                            else
+                            {
+                                // Ensure parent directory exists
+                                string parentDir = Path.GetDirectoryName(destinationPath);
+                                if (!Directory.Exists(parentDir))
+                                {
+                                    Directory.CreateDirectory(parentDir);
+                                }
+
+                                // Extract file
+                                using (Stream entryStream = entry.Open())
+                                using (FileStream fileStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write))
+                                {
+                                    entryStream.CopyTo(fileStream);
+                                }
+                            }
+                        }
+                    }
 
                     // The ZIP contains UnityMcpServer~ folder, find it and move its contents
                     string extractedServerFolder = Path.Combine(tempExtractDir, "UnityMcpServer~");

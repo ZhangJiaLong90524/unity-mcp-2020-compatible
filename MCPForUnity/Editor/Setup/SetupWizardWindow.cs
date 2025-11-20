@@ -5,6 +5,7 @@ using MCPForUnity.Editor.Dependencies;
 using MCPForUnity.Editor.Dependencies.Models;
 using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Editor.Models;
+using MCPForUnity.Editor.Windows;
 using UnityEditor;
 using UnityEngine;
 
@@ -175,7 +176,7 @@ namespace MCPForUnity.Editor.Setup
                 }
                 if (GUILayout.Button("Client Settings", GUILayout.Height(30)))
                 {
-                    Windows.MCPForUnityEditorWindow.ShowWindow();
+                    MCPForUnityEditorWindow.ShowWindow();
                 }
                 EditorGUILayout.EndHorizontal();
             }
