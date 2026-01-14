@@ -5,13 +5,13 @@
             <ui:VisualElement class="key-section">
                 <ui:Label name="key-label" class="key-label" />
             </ui:VisualElement>
-            
+
             <!-- Value field -->
             <ui:TextField name="value-field" class="value-field" />
-            
-            <!-- Type dropdown -->
-            <ui:DropdownField name="type-dropdown" class="type-dropdown" choices="String,Int,Float,Bool" index="0" />
-            
+
+            <!-- Type dropdown (container for Unity 2020 dynamic creation) -->
+            <ui:VisualElement name="type-dropdown-container" class="type-dropdown" />
+
             <!-- Action buttons -->
             <ui:VisualElement class="action-buttons">
                 <ui:Button name="save-button" text="✓" class="save-button" tooltip="Save changes" />

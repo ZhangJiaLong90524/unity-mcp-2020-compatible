@@ -24,10 +24,10 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
     public class McpClientConfigSection
     {
         // UI Elements
-        private VisualElement clientDropdownContainer;
 #if UNITY_2021_1_OR_NEWER
         private DropdownField clientDropdown;
 #else
+        private VisualElement clientDropdownContainer;
         private PopupField<string> clientDropdown;
 #endif
         private Button configureAllButton;
@@ -64,7 +64,11 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
 
         private void CacheUIElements()
         {
+#if UNITY_2021_1_OR_NEWER
+            clientDropdown = Root.Q<DropdownField>("client-dropdown");
+#else
             clientDropdownContainer = Root.Q<VisualElement>("client-dropdown-container");
+#endif
             configureAllButton = Root.Q<Button>("configure-all-button");
             clientStatusIndicator = Root.Q<VisualElement>("client-status-indicator");
             clientStatusLabel = Root.Q<Label>("client-status");
@@ -84,17 +88,22 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
         {
             var clientNames = configurators.Select(c => c.DisplayName).ToList();
 
-            // Dynamically create dropdown for both Unity versions
-            if (clientNames.Count > 0)
+#if UNITY_2021_1_OR_NEWER
+            // Unity 2021+: Use dropdown from UXML, just set choices
+            if (clientDropdown != null && clientNames.Count > 0)
+            {
+                clientDropdown.choices = clientNames;
+                clientDropdown.index = 0;
+            }
+#else
+            // Unity 2020: Dynamically create PopupField
+            if (clientNames.Count > 0 && clientDropdownContainer != null)
             {
                 clientDropdownContainer.Clear();
-#if UNITY_2021_1_OR_NEWER
-                clientDropdown = new DropdownField("", clientNames, 0);
-#else
                 clientDropdown = new PopupField<string>("", clientNames, 0);
-#endif
                 clientDropdownContainer.Add(clientDropdown);
             }
+#endif
 
             claudeCliPathRow.style.display = DisplayStyle.None;
             

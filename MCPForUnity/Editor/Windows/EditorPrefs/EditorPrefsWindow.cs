@@ -83,9 +83,15 @@ namespace MCPForUnity.Editor.Windows
             string basePath = AssetPathUtility.GetMcpPackageRootPath();
             
             // Load UXML
+#if UNITY_2021_1_OR_NEWER
             var visualTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(
                 $"{basePath}/Editor/Windows/EditorPrefs/EditorPrefsWindow.uxml"
             );
+#else
+            var visualTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(
+                $"{basePath}/Editor/Windows/EditorPrefs/EditorPrefsWindow_2020.uxml"
+            );
+#endif
             
             if (visualTree == null)
             {
@@ -94,9 +100,15 @@ namespace MCPForUnity.Editor.Windows
             }
             
             // Load item template
+#if UNITY_2021_1_OR_NEWER
             itemTemplate = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(
                 $"{basePath}/Editor/Windows/EditorPrefs/EditorPrefItem.uxml"
             );
+#else
+            itemTemplate = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(
+                $"{basePath}/Editor/Windows/EditorPrefs/EditorPrefItem_2020.uxml"
+            );
+#endif
             
             if (itemTemplate == null)
             {
@@ -264,15 +276,18 @@ namespace MCPForUnity.Editor.Windows
             var valueField = itemElement.Q<TextField>("value-field");
             valueField.value = item.Value;
             
-            // Dynamically create dropdown for both Unity versions
-            var typeDropdownContainer = itemElement.Q<VisualElement>("type-dropdown-container");
             var typeChoices = new List<string> { "String", "Int", "Float", "Bool" };
 #if UNITY_2021_1_OR_NEWER
-            var typeDropdown = new DropdownField("", typeChoices, (int)item.Type);
+            // Unity 2021+: Use dropdown from UXML
+            var typeDropdown = itemElement.Q<DropdownField>("type-dropdown");
+            typeDropdown.choices = typeChoices;
+            typeDropdown.index = (int)item.Type;
 #else
+            // Unity 2020: Dynamically create PopupField
+            var typeDropdownContainer = itemElement.Q<VisualElement>("type-dropdown-container");
             var typeDropdown = new PopupField<string>("", typeChoices, (int)item.Type);
-#endif
             typeDropdownContainer.Add(typeDropdown);
+#endif
             
             // Buttons
             var saveButton = itemElement.Q<Button>("save-button");

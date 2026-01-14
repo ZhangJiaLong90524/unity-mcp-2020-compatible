@@ -180,9 +180,15 @@ namespace MCPForUnity.Editor.Windows
             }
 
             // Load and initialize Client Configuration section
+#if UNITY_2021_1_OR_NEWER
             var clientConfigTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(
                 $"{basePath}/Editor/Windows/Components/ClientConfig/McpClientConfigSection.uxml"
             );
+#else
+            var clientConfigTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(
+                $"{basePath}/Editor/Windows/Components/ClientConfig/McpClientConfigSection_2020.uxml"
+            );
+#endif
             if (clientConfigTree != null)
             {
                 var clientConfigRoot = clientConfigTree.Instantiate();
