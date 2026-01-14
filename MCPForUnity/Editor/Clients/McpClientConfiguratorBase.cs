@@ -405,8 +405,8 @@ namespace MCPForUnity.Editor.Clients
                         {
                             // Parse the output to determine registered transport mode
                             // The CLI output format contains "Type: http" or "Type: stdio"
-                            bool registeredWithHttp = getStdout.Contains("Type: http", StringComparison.OrdinalIgnoreCase);
-                            bool registeredWithStdio = getStdout.Contains("Type: stdio", StringComparison.OrdinalIgnoreCase);
+                            bool registeredWithHttp = getStdout.IndexOf("Type: http", StringComparison.OrdinalIgnoreCase) >= 0;
+                            bool registeredWithStdio = getStdout.IndexOf("Type: stdio", StringComparison.OrdinalIgnoreCase) >= 0;
 
                             // Check for transport mismatch
                             if ((currentUseHttp && registeredWithStdio) || (!currentUseHttp && registeredWithHttp))

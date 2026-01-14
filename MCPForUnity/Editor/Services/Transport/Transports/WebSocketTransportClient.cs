@@ -1,5 +1,5 @@
 using System;
-using System.Buffers;
+
 using System.Collections.Generic;
 using System.IO;
 using System.Net.WebSockets;
@@ -43,7 +43,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         private CancellationTokenSource _connectionCts;
         private Task _receiveTask;
         private Task _keepAliveTask;
-        private readonly SemaphoreSlim _sendLock = new(1, 1);
+        private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
 
         private Uri _endpointUri;
         private string _sessionId;
@@ -318,7 +318,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 return null;
             }
 
-            byte[] rentedBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(8192);
+            byte[] rentedBuffer = new byte[8192];
             var buffer = new ArraySegment<byte>(rentedBuffer);
             using var ms = new MemoryStream(8192);
 
@@ -354,7 +354,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
             finally
             {
-                System.Buffers.ArrayPool<byte>.Shared.Return(rentedBuffer);
+                
             }
         }
 

@@ -29,7 +29,7 @@ namespace MCPForUnity.Editor.Windows
         private VisualElement settingsPanel;
         private VisualElement toolsPanel;
 
-        private static readonly HashSet<MCPForUnityEditorWindow> OpenWindows = new();
+        private static readonly HashSet<MCPForUnityEditorWindow> OpenWindows = new HashSet<MCPForUnityEditorWindow>();
         private bool guiCreated = false;
         private bool toolsLoaded = false;
         private double lastRefreshTime = 0;

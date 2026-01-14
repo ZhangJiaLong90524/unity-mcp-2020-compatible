@@ -228,18 +228,7 @@ namespace MCPForUnity.Editor.Helpers
         /// <summary>
         /// Ensures the features table contains the rmcp_client flag for HTTP/SSE transport.
         /// </summary>
-        private static void EnsureRmcpClientFeature(TomlTable root)
-        {
-            if (root == null) return;
-
-            if (!root.TryGetNode("features", out var featuresNode) || featuresNode is not TomlTable features)
-            {
-                features = new TomlTable();
-                root["features"] = features;
-            }
-
-            features["rmcp_client"] = new TomlBoolean { Value = true };
-        }
+private static void EnsureRmcpClientFeature(TomlTable root)        {            if (root == null) return;            TomlTable features;            if (!root.TryGetNode("features", out var featuresNode) || !(featuresNode is TomlTable))            {                features = new TomlTable();                root["features"] = features;            }            else            {                features = (TomlTable)featuresNode;            }            features["rmcp_client"] = new TomlBoolean { Value = true };        }
 
         private static bool TryGetTable(TomlTable parent, string key, out TomlTable table)
         {

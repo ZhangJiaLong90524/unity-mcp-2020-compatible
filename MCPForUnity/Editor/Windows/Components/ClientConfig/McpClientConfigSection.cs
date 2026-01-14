@@ -13,6 +13,7 @@ using MCPForUnity.Editor.Services;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
+using UnityEditor.UIElements;
 
 namespace MCPForUnity.Editor.Windows.Components.ClientConfig
 {
@@ -23,7 +24,12 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
     public class McpClientConfigSection
     {
         // UI Elements
+        private VisualElement clientDropdownContainer;
+#if UNITY_2021_1_OR_NEWER
         private DropdownField clientDropdown;
+#else
+        private PopupField<string> clientDropdown;
+#endif
         private Button configureAllButton;
         private VisualElement clientStatusIndicator;
         private Label clientStatusLabel;
@@ -40,8 +46,8 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
 
         // Data
         private readonly List<IMcpClientConfigurator> configurators;
-        private readonly Dictionary<IMcpClientConfigurator, DateTime> lastStatusChecks = new();
-        private readonly HashSet<IMcpClientConfigurator> statusRefreshInFlight = new();
+        private readonly Dictionary<IMcpClientConfigurator, DateTime> lastStatusChecks = new Dictionary<IMcpClientConfigurator, DateTime>();
+        private readonly HashSet<IMcpClientConfigurator> statusRefreshInFlight = new HashSet<IMcpClientConfigurator>();
         private static readonly TimeSpan StatusRefreshInterval = TimeSpan.FromSeconds(45);
         private int selectedClientIndex = 0;
 
@@ -58,7 +64,7 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
 
         private void CacheUIElements()
         {
-            clientDropdown = Root.Q<DropdownField>("client-dropdown");
+            clientDropdownContainer = Root.Q<VisualElement>("client-dropdown-container");
             configureAllButton = Root.Q<Button>("configure-all-button");
             clientStatusIndicator = Root.Q<VisualElement>("client-status-indicator");
             clientStatusLabel = Root.Q<Label>("client-status");
@@ -77,10 +83,17 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
         private void InitializeUI()
         {
             var clientNames = configurators.Select(c => c.DisplayName).ToList();
-            clientDropdown.choices = clientNames;
+
+            // Dynamically create dropdown for both Unity versions
             if (clientNames.Count > 0)
             {
-                clientDropdown.index = 0;
+                clientDropdownContainer.Clear();
+#if UNITY_2021_1_OR_NEWER
+                clientDropdown = new DropdownField("", clientNames, 0);
+#else
+                clientDropdown = new PopupField<string>("", clientNames, 0);
+#endif
+                clientDropdownContainer.Add(clientDropdown);
             }
 
             claudeCliPathRow.style.display = DisplayStyle.None;
@@ -120,20 +133,20 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
 
         private string GetStatusDisplayString(McpStatus status)
         {
-            return status switch
+            switch (status)
             {
-                McpStatus.NotConfigured => "Not Configured",
-                McpStatus.Configured => "Configured",
-                McpStatus.Running => "Running",
-                McpStatus.Connected => "Connected",
-                McpStatus.IncorrectPath => "Incorrect Path",
-                McpStatus.CommunicationError => "Communication Error",
-                McpStatus.NoResponse => "No Response",
-                McpStatus.UnsupportedOS => "Unsupported OS",
-                McpStatus.MissingConfig => "Missing MCPForUnity Config",
-                McpStatus.Error => "Error",
-                _ => "Unknown",
-            };
+                case McpStatus.NotConfigured: return "Not Configured";
+                case McpStatus.Configured: return "Configured";
+                case McpStatus.Running: return "Running";
+                case McpStatus.Connected: return "Connected";
+                case McpStatus.IncorrectPath: return "Incorrect Path";
+                case McpStatus.CommunicationError: return "Communication Error";
+                case McpStatus.NoResponse: return "No Response";
+                case McpStatus.UnsupportedOS: return "Unsupported OS";
+                case McpStatus.MissingConfig: return "Missing MCPForUnity Config";
+                case McpStatus.Error: return "Error";
+                default: return "Unknown";
+            }
         }
 
         public void UpdateManualConfiguration()
@@ -300,7 +313,7 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
             {
                 var client = configurators[selectedClientIndex];
                 // Force immediate for non-Claude CLI, or when explicitly requested
-                bool shouldForceImmediate = forceImmediate || client is not ClaudeCliMcpConfigurator;
+                bool shouldForceImmediate = forceImmediate || !(client is ClaudeCliMcpConfigurator);
                 RefreshClientStatus(client, shouldForceImmediate);
                 UpdateManualConfiguration();
                 UpdateClaudeCliPathVisibility();

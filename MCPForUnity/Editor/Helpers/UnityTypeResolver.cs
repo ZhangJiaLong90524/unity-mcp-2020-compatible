@@ -17,8 +17,8 @@ namespace MCPForUnity.Editor.Helpers
     /// </summary>
     public static class UnityTypeResolver
     {
-        private static readonly Dictionary<string, Type> CacheByFqn = new(StringComparer.Ordinal);
-        private static readonly Dictionary<string, Type> CacheByName = new(StringComparer.Ordinal);
+        private static readonly Dictionary<string, Type> CacheByFqn = new Dictionary<string, Type>(StringComparer.Ordinal);
+        private static readonly Dictionary<string, Type> CacheByName = new Dictionary<string, Type>(StringComparer.Ordinal);
 
         /// <summary>
         /// Resolves a type by name, with optional base type constraint.
@@ -165,9 +165,11 @@ namespace MCPForUnity.Editor.Helpers
             var editorAsms = Array.Empty<System.Reflection.Assembly>();
 #endif
 
-            Func<Type, bool> match = isShort
-                ? (t => t.Name.Equals(query, StringComparison.Ordinal))
-                : (t => t.FullName?.Equals(query, StringComparison.Ordinal) ?? false);
+            Func<Type, bool> match;
+            if (isShort)
+                match = t => t.Name.Equals(query, StringComparison.Ordinal);
+            else
+                match = t => t.FullName?.Equals(query, StringComparison.Ordinal) ?? false;
 
             var fromPlayer = playerAsms.SelectMany(SafeGetTypes)
                                        .Where(t => PassesConstraint(t, requiredBaseType))

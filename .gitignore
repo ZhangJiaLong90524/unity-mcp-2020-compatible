@@ -31,8 +31,19 @@ CONTRIBUTING.md.meta
 .vscode/
 .aider*
 .DS_Store*
+
+# Unity test projects - generated files (standard Unity ignores)
+TestProjects/*/Library/
+TestProjects/*/Temp/
+TestProjects/*/Logs/
+TestProjects/*/UserSettings/
+TestProjects/*/obj/
+TestProjects/*/*.csproj
+TestProjects/*/*.sln
+TestProjects/*/.collabignore
+
 # Unity test project lock files
-TestProjects/UnityMCPTests/Packages/packages-lock.json
+TestProjects/*/Packages/packages-lock.json
 
 # UnityMCPTests stress-run artifacts (these are created by tests/tools and should never be committed)
 TestProjects/UnityMCPTests/Assets/Temp/

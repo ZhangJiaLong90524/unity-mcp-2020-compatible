@@ -8,6 +8,7 @@ using MCPForUnity.Editor.Helpers;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
+using UnityEditor.UIElements;
 
 namespace MCPForUnity.Editor.Windows
 {
@@ -263,8 +264,15 @@ namespace MCPForUnity.Editor.Windows
             var valueField = itemElement.Q<TextField>("value-field");
             valueField.value = item.Value;
             
-            var typeDropdown = itemElement.Q<DropdownField>("type-dropdown");
-            typeDropdown.index = (int)item.Type;
+            // Dynamically create dropdown for both Unity versions
+            var typeDropdownContainer = itemElement.Q<VisualElement>("type-dropdown-container");
+            var typeChoices = new List<string> { "String", "Int", "Float", "Bool" };
+#if UNITY_2021_1_OR_NEWER
+            var typeDropdown = new DropdownField("", typeChoices, (int)item.Type);
+#else
+            var typeDropdown = new PopupField<string>("", typeChoices, (int)item.Type);
+#endif
+            typeDropdownContainer.Add(typeDropdown);
             
             // Buttons
             var saveButton = itemElement.Q<Button>("save-button");

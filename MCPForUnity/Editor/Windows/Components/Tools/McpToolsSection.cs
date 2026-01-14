@@ -16,14 +16,14 @@ namespace MCPForUnity.Editor.Windows.Components.Tools
     /// </summary>
     public class McpToolsSection
     {
-        private readonly Dictionary<string, Toggle> toolToggleMap = new();
+        private readonly Dictionary<string, Toggle> toolToggleMap = new Dictionary<string, Toggle>();
         private Label summaryLabel;
         private Label noteLabel;
         private Button enableAllButton;
         private Button disableAllButton;
         private Button rescanButton;
         private VisualElement categoryContainer;
-        private List<ToolMetadata> allTools = new();
+        private List<ToolMetadata> allTools = new List<ToolMetadata>();
 
         public VisualElement Root { get; }
 

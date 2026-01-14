@@ -5,7 +5,7 @@
         <ui:VisualElement class="section-content">
             <ui:VisualElement class="setting-row">
                 <ui:Label text="Client:" class="setting-label" />
-                <ui:DropdownField name="client-dropdown" class="setting-dropdown-inline" />
+                <ui:VisualElement name="client-dropdown-container" class="setting-dropdown-inline" />
             </ui:VisualElement>
             <ui:Button name="configure-all-button" text="Configure All Detected Clients" class="secondary-button" />
             <ui:VisualElement class="setting-row">

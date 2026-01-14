@@ -50,7 +50,7 @@ namespace MCPForUnity.Editor.Tools
 
             foreach (var token in commandsToken)
             {
-                if (token is not JObject commandObj)
+                JObject commandObj = token as JObject;                if (commandObj == null)
                 {
                     invocationFailureCount++;
                     anyCommandFailed = true;
@@ -144,8 +144,8 @@ namespace MCPForUnity.Editor.Tools
             };
 
             return overallSuccess
-                ? new SuccessResponse("Batch execution completed.", data)
-                : new ErrorResponse("One or more commands failed.", data);
+                ? (IMcpResponse)new SuccessResponse("Batch execution completed.", data)
+                : (IMcpResponse)new ErrorResponse("One or more commands failed.", data);
         }
 
         private static bool DetermineCallSucceeded(object result)
@@ -209,12 +209,11 @@ namespace MCPForUnity.Editor.Tools
 
         private static JToken NormalizeToken(JToken token)
         {
-            return token switch
-            {
-                JObject obj => NormalizeParameterKeys(obj),
-                JArray arr => NormalizeArray(arr),
-                _ => token.DeepClone()
-            };
+            var obj = token as JObject;
+            if (obj != null) return NormalizeParameterKeys(obj);
+            var arr = token as JArray;
+            if (arr != null) return NormalizeArray(arr);
+            return token.DeepClone();
         }
 
         private static string ToCamelCase(string key)
@@ -242,7 +241,7 @@ namespace MCPForUnity.Editor.Tools
                 builder.Append(char.ToUpperInvariant(part[0]));
                 if (part.Length > 1)
                 {
-                    builder.Append(part.AsSpan(1));
+                    builder.Append(part.Substring(1));
                 }
             }
 
