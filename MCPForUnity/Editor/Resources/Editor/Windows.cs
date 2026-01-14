@@ -44,15 +44,15 @@ namespace MCPForUnity.Editor.Resources.Editor
                     }
                     catch (Exception ex)
                     {
-                        Debug.LogWarning($"Could not get info for window {window.GetType().Name}: {ex.Message}");
+                        McpLog.Warn($"Could not get info for window {window.GetType().Name}: {ex.Message}");
                     }
                 }
 
-                return Response.Success("Retrieved list of open editor windows.", openWindows);
+                return new SuccessResponse("Retrieved list of open editor windows.", openWindows);
             }
             catch (Exception e)
             {
-                return Response.Error($"Error getting editor windows: {e.Message}");
+                return new ErrorResponse($"Error getting editor windows: {e.Message}");
             }
         }
     }

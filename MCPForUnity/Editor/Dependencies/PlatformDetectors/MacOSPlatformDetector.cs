@@ -25,24 +25,11 @@ namespace MCPForUnity.Editor.Dependencies.PlatformDetectors
 
             try
             {
-                // Check common Python installation paths on macOS
-                var candidates = new[]
+                // 1. Try 'which' command with augmented PATH (prioritizing Homebrew)
+                if (TryFindInPath("python3", out string pathResult) ||
+                    TryFindInPath("python", out pathResult))
                 {
-                    "python3",
-                    "python",
-                    "/usr/bin/python3",
-                    "/usr/local/bin/python3",
-                    "/opt/homebrew/bin/python3",
-                    "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
-                    "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
-                    "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
-                    "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3",
-                    "/Library/Frameworks/Python.framework/Versions/3.10/bin/python3"
-                };
-
-                foreach (var candidate in candidates)
-                {
-                    if (TryValidatePython(candidate, out string version, out string fullPath))
+                    if (TryValidatePython(pathResult, out string version, out string fullPath))
                     {
                         status.IsAvailable = true;
                         status.Version = version;
@@ -52,22 +39,19 @@ namespace MCPForUnity.Editor.Dependencies.PlatformDetectors
                     }
                 }
 
-                // Try PATH resolution using 'which' command
-                if (TryFindInPath("python3", out string pathResult) ||
-                    TryFindInPath("python", out pathResult))
+                // 2. Fallback: Try running python directly from PATH
+                if (TryValidatePython("python3", out string v, out string p) ||
+                    TryValidatePython("python", out v, out p))
                 {
-                    if (TryValidatePython(pathResult, out string version, out string fullPath))
-                    {
-                        status.IsAvailable = true;
-                        status.Version = version;
-                        status.Path = fullPath;
-                        status.Details = $"Found Python {version} in PATH at {fullPath}";
-                        return status;
-                    }
+                    status.IsAvailable = true;
+                    status.Version = v;
+                    status.Path = p;
+                    status.Details = $"Found Python {v} in PATH";
+                    return status;
                 }
 
-                status.ErrorMessage = "Python not found. Please install Python 3.10 or later.";
-                status.Details = "Checked common installation paths including Homebrew, Framework, and system locations.";
+                status.ErrorMessage = "Python not found in PATH or standard locations";
+                status.Details = "Install Python 3.10+ via Homebrew ('brew install python3') and ensure it's in your PATH.";
             }
             catch (Exception ex)
             {
@@ -82,7 +66,7 @@ namespace MCPForUnity.Editor.Dependencies.PlatformDetectors
             return "https://www.python.org/downloads/macos/";
         }
 
-        public override string GetUVInstallUrl()
+        public override string GetUvInstallUrl()
         {
             return "https://docs.astral.sh/uv/getting-started/installation/#macos";
         }
@@ -95,13 +79,58 @@ namespace MCPForUnity.Editor.Dependencies.PlatformDetectors
    - Homebrew: brew install python3
    - Direct download: https://python.org/downloads/macos/
 
-2. UV Package Manager: Install via curl or Homebrew
+2. uv Package Manager: Install via curl or Homebrew
    - Curl: curl -LsSf https://astral.sh/uv/install.sh | sh
    - Homebrew: brew install uv
 
 3. MCP Server: Will be installed automatically by MCP for Unity Bridge
 
 Note: If using Homebrew, make sure /opt/homebrew/bin is in your PATH.";
+        }
+
+        public override DependencyStatus DetectUv()
+        {
+            var status = new DependencyStatus("uv Package Manager", isRequired: true)
+            {
+                InstallationHint = GetUvInstallUrl()
+            };
+
+            try
+            {
+                // Try running uv/uvx directly with augmented PATH
+                if (TryValidateUv("uv", out string version, out string fullPath) ||
+                    TryValidateUv("uvx", out version, out fullPath))
+                {
+                    status.IsAvailable = true;
+                    status.Version = version;
+                    status.Path = fullPath;
+                    status.Details = $"Found uv {version} in PATH";
+                    return status;
+                }
+
+                // Fallback: use which with augmented PATH
+                if (TryFindInPath("uv", out string pathResult) ||
+                    TryFindInPath("uvx", out pathResult))
+                {
+                    if (TryValidateUv(pathResult, out version, out fullPath))
+                    {
+                        status.IsAvailable = true;
+                        status.Version = version;
+                        status.Path = fullPath;
+                        status.Details = $"Found uv {version} in PATH";
+                        return status;
+                    }
+                }
+
+                status.ErrorMessage = "uv not found in PATH";
+                status.Details = "Install uv package manager and ensure it's added to PATH.";
+            }
+            catch (Exception ex)
+            {
+                status.ErrorMessage = $"Error detecting uv: {ex.Message}";
+            }
+
+            return status;
         }
 
         private bool TryValidatePython(string pythonPath, out string version, out string fullPath)
@@ -158,6 +187,67 @@ Note: If using Homebrew, make sure /opt/homebrew/bin is in your PATH.";
             }
 
             return false;
+        }
+
+        private bool TryValidateUv(string uvPath, out string version, out string fullPath)
+        {
+            version = null;
+            fullPath = null;
+
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = uvPath,
+                    Arguments = "--version",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+
+                var augmentedPath = BuildAugmentedPath();
+                psi.EnvironmentVariables["PATH"] = augmentedPath;
+
+                using var process = Process.Start(psi);
+                if (process == null) return false;
+
+                string output = process.StandardOutput.ReadToEnd().Trim();
+                process.WaitForExit(5000);
+
+                if (process.ExitCode == 0 && output.StartsWith("uv "))
+                {
+                    version = output.Substring(3).Trim();
+                    fullPath = uvPath;
+                    return true;
+                }
+            }
+            catch
+            {
+                // Ignore validation errors
+            }
+
+            return false;
+        }
+
+        private string BuildAugmentedPath()
+        {
+            var pathAdditions = GetPathAdditions();
+            string currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+            return string.Join(":", pathAdditions) + ":" + currentPath;
+        }
+
+        private string[] GetPathAdditions()
+        {
+            var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return new[]
+            {
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                "/usr/bin",
+                "/bin",
+                Path.Combine(homeDir, ".local", "bin")
+            };
         }
 
         private bool TryFindInPath(string executable, out string fullPath)

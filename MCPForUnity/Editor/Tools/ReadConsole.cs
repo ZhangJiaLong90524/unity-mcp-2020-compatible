@@ -2,11 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using MCPForUnity.Editor.Helpers; // For Response class
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditorInternal;
 using UnityEngine;
-using MCPForUnity.Editor.Helpers; // For Response class
 
 namespace MCPForUnity.Editor.Tools
 {
@@ -14,7 +14,7 @@ namespace MCPForUnity.Editor.Tools
     /// Handles reading and clearing Unity Editor console log entries.
     /// Uses reflection to access internal LogEntry methods/properties.
     /// </summary>
-    [McpForUnityTool("read_console")]
+    [McpForUnityTool("read_console", AutoRegister = false)]
     public static class ReadConsole
     {
         // (Calibration removed)
@@ -111,7 +111,7 @@ namespace MCPForUnity.Editor.Tools
             }
             catch (Exception e)
             {
-                Debug.LogError(
+                McpLog.Error(
                     $"[ReadConsole] Static Initialization Failed: Could not setup reflection for LogEntries/LogEntry. Console reading/clearing will likely fail. Specific Error: {e.Message}"
                 );
                 // Set members to null to prevent NullReferenceExceptions later, HandleCommand should check this.
@@ -144,10 +144,10 @@ namespace MCPForUnity.Editor.Tools
             )
             {
                 // Log the error here as well for easier debugging in Unity Console
-                Debug.LogError(
+                McpLog.Error(
                     "[ReadConsole] HandleCommand called but reflection members are not initialized. Static constructor might have failed silently or there's an issue."
                 );
-                return Response.Error(
+                return new ErrorResponse(
                     "ReadConsole handler failed to initialize due to reflection errors. Cannot access console logs."
                 );
             }
@@ -165,13 +165,17 @@ namespace MCPForUnity.Editor.Tools
                     // Extract parameters for 'get'
                     var types =
                         (@params["types"] as JArray)?.Select(t => t.ToString().ToLower()).ToList()
-                        ?? new List<string> { "error", "warning", "log" };
+                        ?? new List<string> { "error", "warning" };
                     int? count = @params["count"]?.ToObject<int?>();
+                    int? pageSize =
+                        @params["pageSize"]?.ToObject<int?>()
+                        ?? @params["page_size"]?.ToObject<int?>();
+                    int? cursor = @params["cursor"]?.ToObject<int?>();
                     string filterText = @params["filterText"]?.ToString();
                     string sinceTimestampStr = @params["sinceTimestamp"]?.ToString(); // TODO: Implement timestamp filtering
-                    string format = (@params["format"]?.ToString() ?? "detailed").ToLower();
+                    string format = (@params["format"]?.ToString() ?? "plain").ToLower();
                     bool includeStacktrace =
-                        @params["includeStacktrace"]?.ToObject<bool?>() ?? true;
+                        @params["includeStacktrace"]?.ToObject<bool?>() ?? false;
 
                     if (types.Contains("all"))
                     {
@@ -180,25 +184,33 @@ namespace MCPForUnity.Editor.Tools
 
                     if (!string.IsNullOrEmpty(sinceTimestampStr))
                     {
-                        Debug.LogWarning(
+                        McpLog.Warn(
                             "[ReadConsole] Filtering by 'since_timestamp' is not currently implemented."
                         );
                         // Need a way to get timestamp per log entry.
                     }
 
-                    return GetConsoleEntries(types, count, filterText, format, includeStacktrace);
+                    return GetConsoleEntries(
+                        types,
+                        count,
+                        pageSize,
+                        cursor,
+                        filterText,
+                        format,
+                        includeStacktrace
+                    );
                 }
                 else
                 {
-                    return Response.Error(
+                    return new ErrorResponse(
                         $"Unknown action: '{action}'. Valid actions are 'get' or 'clear'."
                     );
                 }
             }
             catch (Exception e)
             {
-                Debug.LogError($"[ReadConsole] Action '{action}' failed: {e}");
-                return Response.Error($"Internal error processing action '{action}': {e.Message}");
+                McpLog.Error($"[ReadConsole] Action '{action}' failed: {e}");
+                return new ErrorResponse($"Internal error processing action '{action}': {e.Message}");
             }
         }
 
@@ -209,18 +221,31 @@ namespace MCPForUnity.Editor.Tools
             try
             {
                 _clearMethod.Invoke(null, null); // Static method, no instance, no parameters
-                return Response.Success("Console cleared successfully.");
+                return new SuccessResponse("Console cleared successfully.");
             }
             catch (Exception e)
             {
-                Debug.LogError($"[ReadConsole] Failed to clear console: {e}");
-                return Response.Error($"Failed to clear console: {e.Message}");
+                McpLog.Error($"[ReadConsole] Failed to clear console: {e}");
+                return new ErrorResponse($"Failed to clear console: {e.Message}");
             }
         }
 
+        /// <summary>
+        /// Retrieves console log entries with optional filtering and paging.
+        /// </summary>
+        /// <param name="types">Log types to include (e.g., "error", "warning", "log").</param>
+        /// <param name="count">Maximum entries to return in non-paging mode. Ignored when paging is active.</param>
+        /// <param name="pageSize">Number of entries per page. Defaults to 50 when omitted.</param>
+        /// <param name="cursor">Starting index for paging (0-based). Defaults to 0.</param>
+        /// <param name="filterText">Optional text filter (case-insensitive substring match).</param>
+        /// <param name="format">Output format: "plain", "detailed", or "json".</param>
+        /// <param name="includeStacktrace">Whether to include stack traces in the output.</param>
+        /// <returns>A success response with entries, or an error response.</returns>
         private static object GetConsoleEntries(
             List<string> types,
             int? count,
+            int? pageSize,
+            int? cursor,
             string filterText,
             string format,
             bool includeStacktrace
@@ -228,6 +253,12 @@ namespace MCPForUnity.Editor.Tools
         {
             List<object> formattedEntries = new List<object>();
             int retrievedCount = 0;
+            int totalMatches = 0;
+            bool usePaging = pageSize.HasValue || cursor.HasValue;
+            // pageSize defaults to 50 when omitted; count is the overall non-paging limit only
+            int resolvedPageSize = Mathf.Clamp(pageSize ?? 50, 1, 500);
+            int resolvedCursor = Mathf.Max(0, cursor ?? 0);
+            int pageEndExclusive = resolvedCursor + resolvedPageSize;
 
             try
             {
@@ -338,28 +369,40 @@ namespace MCPForUnity.Editor.Tools
                             break;
                     }
 
-                    formattedEntries.Add(formattedEntry);
-                    retrievedCount++;
+                    totalMatches++;
 
-                    // Apply count limit (after filtering)
-                    if (count.HasValue && retrievedCount >= count.Value)
+                    if (usePaging)
                     {
-                        break;
+                        if (totalMatches > resolvedCursor && totalMatches <= pageEndExclusive)
+                        {
+                            formattedEntries.Add(formattedEntry);
+                            retrievedCount++;
+                        }
+                        // Early exit: we've filled the page and only need to check if more exist
+                        else if (totalMatches > pageEndExclusive)
+                        {
+                            // We've passed the page; totalMatches now indicates truncation
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        formattedEntries.Add(formattedEntry);
+                        retrievedCount++;
+
+                        // Apply count limit (after filtering)
+                        if (count.HasValue && retrievedCount >= count.Value)
+                        {
+                            break;
+                        }
                     }
                 }
             }
             catch (Exception e)
             {
-                Debug.LogError($"[ReadConsole] Error while retrieving log entries: {e}");
-                // Ensure EndGettingEntries is called even if there's an error during iteration
-                try
-                {
-                    _endGettingEntriesMethod.Invoke(null, null);
-                }
-                catch
-                { /* Ignore nested exception */
-                }
-                return Response.Error($"Error retrieving log entries: {e.Message}");
+                McpLog.Error($"[ReadConsole] Error while retrieving log entries: {e}");
+                // EndGettingEntries will be called in the finally block
+                return new ErrorResponse($"Error retrieving log entries: {e.Message}");
             }
             finally
             {
@@ -370,13 +413,33 @@ namespace MCPForUnity.Editor.Tools
                 }
                 catch (Exception e)
                 {
-                    Debug.LogError($"[ReadConsole] Failed to call EndGettingEntries: {e}");
+                    McpLog.Error($"[ReadConsole] Failed to call EndGettingEntries: {e}");
                     // Don't return error here as we might have valid data, but log it.
                 }
             }
 
+            if (usePaging)
+            {
+                bool truncated = totalMatches > pageEndExclusive;
+                string nextCursor = truncated ? pageEndExclusive.ToString() : null;
+                var payload = new
+                {
+                    cursor = resolvedCursor,
+                    pageSize = resolvedPageSize,
+                    nextCursor = nextCursor,
+                    truncated = truncated,
+                    total = totalMatches,
+                    items = formattedEntries,
+                };
+
+                return new SuccessResponse(
+                    $"Retrieved {formattedEntries.Count} log entries.",
+                    payload
+                );
+            }
+
             // Return the filtered and formatted list (might be empty)
-            return Response.Success(
+            return new SuccessResponse(
                 $"Retrieved {formattedEntries.Count} log entries.",
                 formattedEntries
             );

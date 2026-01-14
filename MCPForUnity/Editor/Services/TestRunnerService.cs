@@ -5,8 +5,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using MCPForUnity.Editor.Helpers;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEditor.TestTools.TestRunner.Api;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace MCPForUnity.Editor.Services
 {
@@ -31,7 +33,7 @@ namespace MCPForUnity.Editor.Services
 
         public async Task<IReadOnlyList<Dictionary<string, string>>> GetTestsAsync(TestMode? mode)
         {
-            await _operationLock.WaitAsync().ConfigureAwait(false);
+            await _operationLock.WaitAsync().ConfigureAwait(true);
             try
             {
                 var modes = mode.HasValue ? new[] { mode.Value } : AllModes;
@@ -56,10 +58,13 @@ namespace MCPForUnity.Editor.Services
             }
         }
 
-        public async Task<TestRunResult> RunTestsAsync(TestMode mode)
+        public async Task<TestRunResult> RunTestsAsync(TestMode mode, TestFilterOptions filterOptions = null)
         {
-            await _operationLock.WaitAsync().ConfigureAwait(false);
+            await _operationLock.WaitAsync().ConfigureAwait(true);
             Task<TestRunResult> runTask;
+            bool adjustedPlayModeOptions = false;
+            bool originalEnterPlayModeOptionsEnabled = false;
+            EnterPlayModeOptions originalEnterPlayModeOptions = EnterPlayModeOptions.None;
             try
             {
                 if (_runCompletionSource != null && !_runCompletionSource.Task.IsCompleted)
@@ -67,16 +72,57 @@ namespace MCPForUnity.Editor.Services
                     throw new InvalidOperationException("A Unity test run is already in progress.");
                 }
 
+                if (EditorApplication.isPlaying || EditorApplication.isPlayingOrWillChangePlaymode)
+                {
+                    throw new InvalidOperationException("Cannot start a test run while the Editor is in or entering Play Mode. Stop Play Mode and try again.");
+                }
+
+                if (mode == TestMode.PlayMode)
+                {
+                    // PlayMode runs transition the editor into play across multiple update ticks. Unity's
+                    // built-in pipeline schedules SaveModifiedSceneTask early, but that task uses
+                    // EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo which throws once play mode is
+                    // active. To minimize that window we pre-save dirty scenes and disable domain reload (so the
+                    // MCP bridge stays alive). We do NOT force runSynchronously here because that can freeze the
+                    // editor in some projects. If the TestRunner still hits the save task after entering play, the
+                    // run can fail; in that case, rerun from a clean Edit Mode state.
+                    adjustedPlayModeOptions = EnsurePlayModeRunsWithoutDomainReload(
+                        out originalEnterPlayModeOptionsEnabled,
+                        out originalEnterPlayModeOptions);
+                }
+
                 _leafResults.Clear();
                 _runCompletionSource = new TaskCompletionSource<TestRunResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                // Mark running immediately so readiness snapshots reflect the busy state even before callbacks fire.
+                TestRunStatus.MarkStarted(mode);
 
-                var filter = new Filter { testMode = mode };
-                _testRunnerApi.Execute(new ExecutionSettings(filter));
+                var filter = new Filter
+                {
+                    testMode = mode,
+                    testNames = filterOptions?.TestNames,
+                    groupNames = filterOptions?.GroupNames,
+                    categoryNames = filterOptions?.CategoryNames,
+                    assemblyNames = filterOptions?.AssemblyNames
+                };
+                var settings = new ExecutionSettings(filter);
+
+                // Save dirty scenes for all test modes to prevent modal dialogs blocking MCP
+                // (Issue #525: EditMode tests were blocked by save dialog)
+                SaveDirtyScenesIfNeeded();
+
+                _testRunnerApi.Execute(settings);
 
                 runTask = _runCompletionSource.Task;
             }
             catch
             {
+                // Ensure the status is cleared if we failed to start the run.
+                TestRunStatus.MarkFinished();
+                if (adjustedPlayModeOptions)
+                {
+                    RestoreEnterPlayModeOptions(originalEnterPlayModeOptionsEnabled, originalEnterPlayModeOptions);
+                }
+
                 _operationLock.Release();
                 throw;
             }
@@ -87,6 +133,11 @@ namespace MCPForUnity.Editor.Services
             }
             finally
             {
+                if (adjustedPlayModeOptions)
+                {
+                    RestoreEnterPlayModeOptions(originalEnterPlayModeOptionsEnabled, originalEnterPlayModeOptions);
+                }
+
                 _operationLock.Release();
             }
         }
@@ -115,6 +166,20 @@ namespace MCPForUnity.Editor.Services
         public void RunStarted(ITestAdaptor testsToRun)
         {
             _leafResults.Clear();
+            try
+            {
+                // Best-effort progress info for async polling (avoid heavy payloads).
+                int? total = null;
+                if (testsToRun != null)
+                {
+                    total = CountLeafTests(testsToRun);
+                }
+                TestJobManager.OnRunStarted(total);
+            }
+            catch
+            {
+                TestJobManager.OnRunStarted(null);
+            }
         }
 
         public void RunFinished(ITestResultAdaptor result)
@@ -127,11 +192,27 @@ namespace MCPForUnity.Editor.Services
             var payload = TestRunResult.Create(result, _leafResults);
             _runCompletionSource.TrySetResult(payload);
             _runCompletionSource = null;
+            TestRunStatus.MarkFinished();
+            TestJobManager.OnRunFinished();
+            TestJobManager.FinalizeCurrentJobFromRunFinished(payload);
         }
 
         public void TestStarted(ITestAdaptor test)
         {
-            // No-op
+            try
+            {
+                // Prefer FullName for uniqueness; fall back to Name.
+                string fullName = test?.FullName;
+                if (string.IsNullOrWhiteSpace(fullName))
+                {
+                    fullName = test?.Name;
+                }
+                TestJobManager.OnTestStarted(fullName);
+            }
+            catch
+            {
+                // ignore
+            }
         }
 
         public void TestFinished(ITestResultAdaptor result)
@@ -144,10 +225,125 @@ namespace MCPForUnity.Editor.Services
             if (!result.HasChildren)
             {
                 _leafResults.Add(result);
+                try
+                {
+                    string fullName = result.Test?.FullName;
+                    if (string.IsNullOrWhiteSpace(fullName))
+                    {
+                        fullName = result.Test?.Name;
+                    }
+
+                    bool isFailure = false;
+                    string message = null;
+                    try
+                    {
+                        // NUnit outcomes are strings in the adaptor; keep it simple.
+                        string outcome = result.ResultState;
+                        if (!string.IsNullOrWhiteSpace(outcome))
+                        {
+                            var o = outcome.Trim().ToLowerInvariant();
+                            isFailure = o.Contains("failed") || o.Contains("error");
+                        }
+                        message = result.Message;
+                    }
+                    catch
+                    {
+                        // ignore adaptor quirks
+                    }
+
+                    TestJobManager.OnLeafTestFinished(fullName, isFailure, message);
+                }
+                catch
+                {
+                    // ignore
+                }
             }
         }
 
         #endregion
+
+        private static int CountLeafTests(ITestAdaptor node)
+        {
+            if (node == null)
+            {
+                return 0;
+            }
+
+            if (!node.HasChildren)
+            {
+                return 1;
+            }
+
+            int total = 0;
+            try
+            {
+                foreach (var child in node.Children)
+                {
+                    total += CountLeafTests(child);
+                }
+            }
+            catch
+            {
+                // If Unity changes the adaptor behavior, treat it as "unknown total".
+                return 0;
+            }
+
+            return total;
+        }
+
+        private static bool EnsurePlayModeRunsWithoutDomainReload(
+            out bool originalEnterPlayModeOptionsEnabled,
+            out EnterPlayModeOptions originalEnterPlayModeOptions)
+        {
+            originalEnterPlayModeOptionsEnabled = EditorSettings.enterPlayModeOptionsEnabled;
+            originalEnterPlayModeOptions = EditorSettings.enterPlayModeOptions;
+
+            // When Play Mode triggers a domain reload, the MCP connection is torn down and the pending
+            // test run response never makes it back to the caller. To keep the bridge alive for this
+            // invocation, temporarily enable Enter Play Mode Options with domain reload disabled.
+            bool domainReloadDisabled = (originalEnterPlayModeOptions & EnterPlayModeOptions.DisableDomainReload) != 0;
+            bool needsChange = !originalEnterPlayModeOptionsEnabled || !domainReloadDisabled;
+            if (!needsChange)
+            {
+                return false;
+            }
+
+            var desired = originalEnterPlayModeOptions | EnterPlayModeOptions.DisableDomainReload;
+            EditorSettings.enterPlayModeOptionsEnabled = true;
+            EditorSettings.enterPlayModeOptions = desired;
+            return true;
+        }
+
+        private static void RestoreEnterPlayModeOptions(bool originalEnabled, EnterPlayModeOptions originalOptions)
+        {
+            EditorSettings.enterPlayModeOptions = originalOptions;
+            EditorSettings.enterPlayModeOptionsEnabled = originalEnabled;
+        }
+
+        private static void SaveDirtyScenesIfNeeded()
+        {
+            int sceneCount = SceneManager.sceneCount;
+            for (int i = 0; i < sceneCount; i++)
+            {
+                var scene = SceneManager.GetSceneAt(i);
+                if (scene.isDirty)
+                {
+                    if (string.IsNullOrEmpty(scene.path))
+                    {
+                        McpLog.Warn($"[TestRunnerService] Skipping unsaved scene '{scene.name}': save it manually before running tests.");
+                        continue;
+                    }
+                    try
+                    {
+                        EditorSceneManager.SaveScene(scene);
+                    }
+                    catch (Exception ex)
+                    {
+                        McpLog.Warn($"[TestRunnerService] Failed to save dirty scene '{scene.name}': {ex.Message}");
+                    }
+                }
+            }
+        }
 
         #region Test list helpers
 
@@ -254,13 +450,33 @@ namespace MCPForUnity.Editor.Services
         public int Failed => Summary.Failed;
         public int Skipped => Summary.Skipped;
 
-        public object ToSerializable(string mode)
+        public object ToSerializable(string mode, bool includeDetails = false, bool includeFailedTests = false)
         {
+            // Determine which results to include
+            IEnumerable<object> resultsToSerialize;
+            if (includeDetails)
+            {
+                // Include all test results
+                resultsToSerialize = Results.Select(r => r.ToSerializable());
+            }
+            else if (includeFailedTests)
+            {
+                // Include only failed and skipped tests
+                resultsToSerialize = Results
+                    .Where(r => !string.Equals(r.State, "Passed", StringComparison.OrdinalIgnoreCase))
+                    .Select(r => r.ToSerializable());
+            }
+            else
+            {
+                // No individual test results
+                resultsToSerialize = null;
+            }
+
             return new
             {
                 mode,
                 summary = Summary.ToSerializable(),
-                results = Results.Select(r => r.ToSerializable()).ToList(),
+                results = resultsToSerialize?.ToList(),
             };
         }
 

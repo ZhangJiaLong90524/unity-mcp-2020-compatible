@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEngine;
+using MCPForUnity.Editor.Constants;
 using MCPForUnity.Editor.Helpers;
 using System.Threading;
 using System.Security.Cryptography;
@@ -25,7 +26,8 @@ namespace MCPForUnity.Editor.Tools
 {
     /// <summary>
     /// Handles CRUD operations for C# scripts within the Unity project.
-    /// 
+    /// </summary>
+    /// <remarks>
     /// ROSLYN INSTALLATION GUIDE:
     /// To enable advanced syntax validation with Roslyn compiler services:
     /// 
@@ -48,8 +50,8 @@ namespace MCPForUnity.Editor.Tools
     /// 
     /// Note: Without Roslyn, the system falls back to basic structural validation.
     /// Roslyn provides full C# compiler diagnostics with line numbers and detailed error messages.
-    /// </summary>
-    [McpForUnityTool("manage_script")]
+    /// </remarks>
+    [McpForUnityTool("manage_script", AutoRegister = false)]
     public static class ManageScript
     {
         /// <summary>
@@ -63,7 +65,17 @@ namespace MCPForUnity.Editor.Tools
             // Normalize caller path: allow both "Scripts/..." and "Assets/Scripts/..."
             string rel = (relDir ?? "Scripts").Replace('\\', '/').Trim();
             if (string.IsNullOrEmpty(rel)) rel = "Scripts";
-            if (rel.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase)) rel = rel.Substring(7);
+
+            // Handle both "Assets" and "Assets/" prefixes
+            if (rel.Equals("Assets", StringComparison.OrdinalIgnoreCase))
+            {
+                rel = string.Empty;
+            }
+            else if (rel.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            {
+                rel = rel.Substring(7);
+            }
+
             rel = rel.TrimStart('/');
 
             string targetDir = Path.Combine(assets, rel).Replace('\\', '/');
@@ -114,7 +126,7 @@ namespace MCPForUnity.Editor.Tools
             // Handle null parameters
             if (@params == null)
             {
-                return Response.Error("invalid_params", "Parameters cannot be null.");
+                return new ErrorResponse("invalid_params", "Parameters cannot be null.");
             }
 
             // Extract parameters
@@ -133,7 +145,7 @@ namespace MCPForUnity.Editor.Tools
                 }
                 catch (Exception e)
                 {
-                    return Response.Error($"Failed to decode script contents: {e.Message}");
+                    return new ErrorResponse($"Failed to decode script contents: {e.Message}");
                 }
             }
             else
@@ -147,16 +159,16 @@ namespace MCPForUnity.Editor.Tools
             // Validate required parameters
             if (string.IsNullOrEmpty(action))
             {
-                return Response.Error("Action parameter is required.");
+                return new ErrorResponse("Action parameter is required.");
             }
             if (string.IsNullOrEmpty(name))
             {
-                return Response.Error("Name parameter is required.");
+                return new ErrorResponse("Name parameter is required.");
             }
             // Basic name validation (alphanumeric, underscores, cannot start with number)
             if (!Regex.IsMatch(name, @"^[a-zA-Z_][a-zA-Z0-9_]*$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(2)))
             {
-                return Response.Error(
+                return new ErrorResponse(
                     $"Invalid script name: '{name}'. Use only letters, numbers, underscores, and don't start with a number."
                 );
             }
@@ -164,7 +176,7 @@ namespace MCPForUnity.Editor.Tools
             // Resolve and harden target directory under Assets/
             if (!TryResolveUnderAssets(path, out string fullPathDir, out string relPathSafeDir))
             {
-                return Response.Error($"Invalid path. Target directory must be within 'Assets/'. Provided: '{(path ?? "(null)")}'");
+                return new ErrorResponse($"Invalid path. Target directory must be within 'Assets/'. Provided: '{(path ?? "(null)")}'");
             }
 
             // Construct file paths
@@ -181,7 +193,7 @@ namespace MCPForUnity.Editor.Tools
                 }
                 catch (Exception e)
                 {
-                    return Response.Error(
+                    return new ErrorResponse(
                         $"Could not create directory '{fullPathDir}': {e.Message}"
                     );
                 }
@@ -229,7 +241,7 @@ namespace MCPForUnity.Editor.Tools
                         };
                         string fileText;
                         try { fileText = File.ReadAllText(fullPath); }
-                        catch (Exception ex) { return Response.Error($"Failed to read script: {ex.Message}"); }
+                        catch (Exception ex) { return new ErrorResponse($"Failed to read script: {ex.Message}"); }
 
                         bool ok = ValidateScriptSyntax(fileText, chosen, out string[] diagsRaw);
                         var diags = (diagsRaw ?? Array.Empty<string>()).Select(s =>
@@ -247,11 +259,11 @@ namespace MCPForUnity.Editor.Tools
                         }).ToArray();
 
                         var result = new { diagnostics = diags };
-                        return ok ? Response.Success("Validation completed.", result)
-                                   : Response.Error("Validation failed.", result);
+                        return ok ? new SuccessResponse("Validation completed.", result)
+                                   : new ErrorResponse("Validation failed.", result);
                     }
                 case "edit":
-                    Debug.LogWarning("manage_script.edit is deprecated; prefer apply_text_edits. Serving structured edit for backward compatibility.");
+                    McpLog.Warn("manage_script.edit is deprecated; prefer apply_text_edits. Serving structured edit for backward compatibility.");
                     var structEdits = @params["edits"] as JArray;
                     var options = @params["options"] as JObject;
                     return EditScript(fullPath, relativePath, name, structEdits, options);
@@ -260,7 +272,7 @@ namespace MCPForUnity.Editor.Tools
                         try
                         {
                             if (!File.Exists(fullPath))
-                                return Response.Error($"Script not found at '{relativePath}'.");
+                                return new ErrorResponse($"Script not found at '{relativePath}'.");
 
                             string text = File.ReadAllText(fullPath);
                             string sha = ComputeSha256(text);
@@ -270,21 +282,21 @@ namespace MCPForUnity.Editor.Tools
                             catch { lengthBytes = fi.Exists ? fi.Length : 0; }
                             var data = new
                             {
-                                uri = $"unity://path/{relativePath}",
+                                uri = $"mcpforunity://path/{relativePath}",
                                 path = relativePath,
                                 sha256 = sha,
                                 lengthBytes,
                                 lastModifiedUtc = fi.Exists ? fi.LastWriteTimeUtc.ToString("o") : string.Empty
                             };
-                            return Response.Success($"SHA computed for '{relativePath}'.", data);
+                            return new SuccessResponse($"SHA computed for '{relativePath}'.", data);
                         }
                         catch (Exception ex)
                         {
-                            return Response.Error($"Failed to compute SHA: {ex.Message}");
+                            return new ErrorResponse($"Failed to compute SHA: {ex.Message}");
                         }
                     }
                 default:
-                    return Response.Error(
+                    return new ErrorResponse(
                         $"Unknown action: '{action}'. Valid actions are: create, delete, apply_text_edits, validate, read (deprecated), update (deprecated), edit (deprecated)."
                     );
             }
@@ -320,7 +332,7 @@ namespace MCPForUnity.Editor.Tools
             // Check if script already exists
             if (File.Exists(fullPath))
             {
-                return Response.Error(
+                return new ErrorResponse(
                     $"Script already exists at '{relativePath}'. Use 'update' action to modify."
                 );
             }
@@ -336,12 +348,12 @@ namespace MCPForUnity.Editor.Tools
             bool isValid = ValidateScriptSyntax(contents, validationLevel, out string[] validationErrors);
             if (!isValid)
             {
-                return Response.Error("validation_failed", new { status = "validation_failed", diagnostics = validationErrors ?? Array.Empty<string>() });
+                return new ErrorResponse("validation_failed", new { status = "validation_failed", diagnostics = validationErrors ?? Array.Empty<string>() });
             }
             else if (validationErrors != null && validationErrors.Length > 0)
             {
                 // Log warnings but don't block creation
-                Debug.LogWarning($"Script validation warnings for {name}:\n" + string.Join("\n", validationErrors));
+                McpLog.Warn($"Script validation warnings for {name}:\n" + string.Join("\n", validationErrors));
             }
 
             try
@@ -360,8 +372,8 @@ namespace MCPForUnity.Editor.Tools
                     try { File.Delete(tmp); } catch { }
                 }
 
-                var uri = $"unity://path/{relativePath}";
-                var ok = Response.Success(
+                var uri = $"mcpforunity://path/{relativePath}";
+                var ok = new SuccessResponse(
                     $"Script '{name}.cs' created successfully at '{relativePath}'.",
                     new { uri, scheduledRefresh = false }
                 );
@@ -372,7 +384,7 @@ namespace MCPForUnity.Editor.Tools
             }
             catch (Exception e)
             {
-                return Response.Error($"Failed to create script '{relativePath}': {e.Message}");
+                return new ErrorResponse($"Failed to create script '{relativePath}': {e.Message}");
             }
         }
 
@@ -380,7 +392,7 @@ namespace MCPForUnity.Editor.Tools
         {
             if (!File.Exists(fullPath))
             {
-                return Response.Error($"Script not found at '{relativePath}'.");
+                return new ErrorResponse($"Script not found at '{relativePath}'.");
             }
 
             try
@@ -389,7 +401,7 @@ namespace MCPForUnity.Editor.Tools
 
                 // Return both normal and encoded contents for larger files
                 bool isLarge = contents.Length > 10000; // If content is large, include encoded version
-                var uri = $"unity://path/{relativePath}";
+                var uri = $"mcpforunity://path/{relativePath}";
                 var responseData = new
                 {
                     uri,
@@ -400,14 +412,14 @@ namespace MCPForUnity.Editor.Tools
                     contentsEncoded = isLarge,
                 };
 
-                return Response.Success(
+                return new SuccessResponse(
                     $"Script '{Path.GetFileName(relativePath)}' read successfully.",
                     responseData
                 );
             }
             catch (Exception e)
             {
-                return Response.Error($"Failed to read script '{relativePath}': {e.Message}");
+                return new ErrorResponse($"Failed to read script '{relativePath}': {e.Message}");
             }
         }
 
@@ -420,13 +432,13 @@ namespace MCPForUnity.Editor.Tools
         {
             if (!File.Exists(fullPath))
             {
-                return Response.Error(
+                return new ErrorResponse(
                     $"Script not found at '{relativePath}'. Use 'create' action to add a new script."
                 );
             }
             if (string.IsNullOrEmpty(contents))
             {
-                return Response.Error("Content is required for the 'update' action.");
+                return new ErrorResponse("Content is required for the 'update' action.");
             }
 
             // Validate syntax with detailed error reporting using GUI setting
@@ -434,12 +446,12 @@ namespace MCPForUnity.Editor.Tools
             bool isValid = ValidateScriptSyntax(contents, validationLevel, out string[] validationErrors);
             if (!isValid)
             {
-                return Response.Error("validation_failed", new { status = "validation_failed", diagnostics = validationErrors ?? Array.Empty<string>() });
+                return new ErrorResponse("validation_failed", new { status = "validation_failed", diagnostics = validationErrors ?? Array.Empty<string>() });
             }
             else if (validationErrors != null && validationErrors.Length > 0)
             {
                 // Log warnings but don't block update
-                Debug.LogWarning($"Script validation warnings for {name}:\n" + string.Join("\n", validationErrors));
+                McpLog.Warn($"Script validation warnings for {name}:\n" + string.Join("\n", validationErrors));
             }
 
             try
@@ -469,8 +481,8 @@ namespace MCPForUnity.Editor.Tools
                 }
 
                 // Prepare success response BEFORE any operation that can trigger a domain reload
-                var uri = $"unity://path/{relativePath}";
-                var ok = Response.Success(
+                var uri = $"mcpforunity://path/{relativePath}";
+                var ok = new SuccessResponse(
                     $"Script '{name}.cs' updated successfully at '{relativePath}'.",
                     new { uri, path = relativePath, scheduledRefresh = true }
                 );
@@ -482,7 +494,7 @@ namespace MCPForUnity.Editor.Tools
             }
             catch (Exception e)
             {
-                return Response.Error($"Failed to update script '{relativePath}': {e.Message}");
+                return new ErrorResponse($"Failed to update script '{relativePath}': {e.Message}");
             }
         }
 
@@ -501,7 +513,7 @@ namespace MCPForUnity.Editor.Tools
             string validateMode = null)
         {
             if (!File.Exists(fullPath))
-                return Response.Error($"Script not found at '{relativePath}'.");
+                return new ErrorResponse($"Script not found at '{relativePath}'.");
             // Refuse edits if the target or any ancestor is a symlink
             try
             {
@@ -509,7 +521,7 @@ namespace MCPForUnity.Editor.Tools
                 while (di != null && !string.Equals(di.FullName.Replace('\\', '/'), Application.dataPath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
                 {
                     if (di.Exists && (di.Attributes & FileAttributes.ReparsePoint) != 0)
-                        return Response.Error("Refusing to edit a symlinked script path.");
+                        return new ErrorResponse("Refusing to edit a symlinked script path.");
                     di = di.Parent;
                 }
             }
@@ -518,18 +530,18 @@ namespace MCPForUnity.Editor.Tools
                 // If checking attributes fails, proceed without the symlink guard
             }
             if (edits == null || edits.Count == 0)
-                return Response.Error("No edits provided.");
+                return new ErrorResponse("No edits provided.");
 
             string original;
             try { original = File.ReadAllText(fullPath); }
-            catch (Exception ex) { return Response.Error($"Failed to read script: {ex.Message}"); }
+            catch (Exception ex) { return new ErrorResponse($"Failed to read script: {ex.Message}"); }
 
             // Require precondition to avoid drift on large files
             string currentSha = ComputeSha256(original);
             if (string.IsNullOrEmpty(preconditionSha256))
-                return Response.Error("precondition_required", new { status = "precondition_required", current_sha256 = currentSha });
+                return new ErrorResponse("precondition_required", new { status = "precondition_required", current_sha256 = currentSha });
             if (!preconditionSha256.Equals(currentSha, StringComparison.OrdinalIgnoreCase))
-                return Response.Error("stale_file", new { status = "stale_file", expected_sha256 = preconditionSha256, current_sha256 = currentSha });
+                return new ErrorResponse("stale_file", new { status = "stale_file", expected_sha256 = preconditionSha256, current_sha256 = currentSha });
 
             // Convert edits to absolute index ranges
             var spans = new List<(int start, int end, string text)>();
@@ -545,9 +557,9 @@ namespace MCPForUnity.Editor.Tools
                     string newText = e.Value<string>("newText") ?? string.Empty;
 
                     if (!TryIndexFromLineCol(original, sl, sc, out int sidx))
-                        return Response.Error($"apply_text_edits: start out of range (line {sl}, col {sc})");
+                        return new ErrorResponse($"apply_text_edits: start out of range (line {sl}, col {sc})");
                     if (!TryIndexFromLineCol(original, el, ec, out int eidx))
-                        return Response.Error($"apply_text_edits: end out of range (line {el}, col {ec})");
+                        return new ErrorResponse($"apply_text_edits: end out of range (line {el}, col {ec})");
                     if (eidx < sidx) (sidx, eidx) = (eidx, sidx);
 
                     spans.Add((sidx, eidx, newText));
@@ -558,7 +570,7 @@ namespace MCPForUnity.Editor.Tools
                 }
                 catch (Exception ex)
                 {
-                    return Response.Error($"Invalid edit payload: {ex.Message}");
+                    return new ErrorResponse($"Invalid edit payload: {ex.Message}");
                 }
             }
 
@@ -579,7 +591,7 @@ namespace MCPForUnity.Editor.Tools
             {
                 if (sp.start < headerBoundary)
                 {
-                    return Response.Error("using_guard", new { status = "using_guard", hint = "Refusing to edit before the first 'using'. Use anchor_insert near a method or a structured edit." });
+                    return new ErrorResponse("using_guard", new { status = "using_guard", hint = "Refusing to edit before the first 'using'. Use anchor_insert near a method or a structured edit." });
                 }
             }
 
@@ -650,7 +662,7 @@ namespace MCPForUnity.Editor.Tools
 
             if (totalBytes > MaxEditPayloadBytes)
             {
-                return Response.Error("too_large", new { status = "too_large", limitBytes = MaxEditPayloadBytes, hint = "split into smaller edits" });
+                return new ErrorResponse("too_large", new { status = "too_large", limitBytes = MaxEditPayloadBytes, hint = "split into smaller edits" });
             }
 
             // Ensure non-overlap and apply from back to front
@@ -660,7 +672,7 @@ namespace MCPForUnity.Editor.Tools
                 if (spans[i].end > spans[i - 1].start)
                 {
                     var conflict = new[] { new { startA = spans[i].start, endA = spans[i].end, startB = spans[i - 1].start, endB = spans[i - 1].end } };
-                    return Response.Error("overlap", new { status = "overlap", conflicts = conflict, hint = "Sort ranges descending by start and compute from the same snapshot." });
+                    return new ErrorResponse("overlap", new { status = "overlap", conflicts = conflict, hint = "Sort ranges descending by start and compute from the same snapshot." });
                 }
             }
 
@@ -678,7 +690,7 @@ namespace MCPForUnity.Editor.Tools
                     int endPos = sp.start + newLength;
                     if (!CheckScopedBalance(next, Math.Max(0, sp.start - 500), Math.Min(next.Length, endPos + 500)))
                     {
-                        return Response.Error("unbalanced_braces", new { status = "unbalanced_braces", line = 0, expected = "{}()[] (scoped)", hint = "Use standard validation or shrink the edit range." });
+                        return new ErrorResponse("unbalanced_braces", new { status = "unbalanced_braces", line = 0, expected = "{}()[] (scoped)", hint = "Use standard validation or shrink the edit range." });
                     }
                 }
                 working = next;
@@ -688,11 +700,11 @@ namespace MCPForUnity.Editor.Tools
             if (string.Equals(working, original, StringComparison.Ordinal))
             {
                 string noChangeSha = ComputeSha256(original);
-                return Response.Success(
+                return new SuccessResponse(
                     $"No-op: contents unchanged for '{relativePath}'.",
                     new
                     {
-                        uri = $"unity://path/{relativePath}",
+                        uri = $"mcpforunity://path/{relativePath}",
                         path = relativePath,
                         editsApplied = 0,
                         no_op = true,
@@ -708,7 +720,7 @@ namespace MCPForUnity.Editor.Tools
                 int startLine = Math.Max(1, line - 5);
                 int endLine = line + 5;
                 string hint = $"unbalanced_braces at line {line}. Call resources/read for lines {startLine}-{endLine} and resend a smaller apply_text_edits that restores balance.";
-                return Response.Error(hint, new { status = "unbalanced_braces", line, expected = expected.ToString(), evidenceWindow = new { startLine, endLine } });
+                return new ErrorResponse(hint, new { status = "unbalanced_braces", line, expected = expected.ToString(), evidenceWindow = new { startLine, endLine } });
             }
 
 #if USE_ROSLYN
@@ -727,7 +739,7 @@ namespace MCPForUnity.Editor.Tools
                     int firstLine = diagnostics[0].line;
                     int startLineRos = Math.Max(1, firstLine - 5);
                     int endLineRos = firstLine + 5;
-                    return Response.Error("syntax_error", new { status = "syntax_error", diagnostics, evidenceWindow = new { startLine = startLineRos, endLine = endLineRos } });
+                    return new ErrorResponse("syntax_error", new { status = "syntax_error", diagnostics, evidenceWindow = new { startLine = startLineRos, endLine = endLineRos } });
                 }
 
                 // Optional formatting
@@ -789,11 +801,11 @@ namespace MCPForUnity.Editor.Tools
                     ManageScriptRefreshHelpers.ScheduleScriptRefresh(relativePath);
                 }
 
-                return Response.Success(
+                return new SuccessResponse(
                     $"Applied {spans.Count} text edit(s) to '{relativePath}'.",
                     new
                     {
-                        uri = $"unity://path/{relativePath}",
+                        uri = $"mcpforunity://path/{relativePath}",
                         path = relativePath,
                         editsApplied = spans.Count,
                         sha256 = newSha,
@@ -803,7 +815,7 @@ namespace MCPForUnity.Editor.Tools
             }
             catch (Exception ex)
             {
-                return Response.Error($"Failed to write edits: {ex.Message}");
+                return new ErrorResponse($"Failed to write edits: {ex.Message}");
             }
         }
 
@@ -957,7 +969,7 @@ namespace MCPForUnity.Editor.Tools
         {
             if (!File.Exists(fullPath))
             {
-                return Response.Error($"Script not found at '{relativePath}'. Cannot delete.");
+                return new ErrorResponse($"Script not found at '{relativePath}'. Cannot delete.");
             }
 
             try
@@ -966,8 +978,8 @@ namespace MCPForUnity.Editor.Tools
                 bool deleted = AssetDatabase.MoveAssetToTrash(relativePath);
                 if (deleted)
                 {
-                    AssetDatabase.Refresh();
-                    return Response.Success(
+                    AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+                    return new SuccessResponse(
                         $"Script '{Path.GetFileName(relativePath)}' moved to trash successfully.",
                         new { deleted = true }
                     );
@@ -975,14 +987,14 @@ namespace MCPForUnity.Editor.Tools
                 else
                 {
                     // Fallback or error if MoveAssetToTrash fails
-                    return Response.Error(
+                    return new ErrorResponse(
                         $"Failed to move script '{relativePath}' to trash. It might be locked or in use."
                     );
                 }
             }
             catch (Exception e)
             {
-                return Response.Error($"Error deleting script '{relativePath}': {e.Message}");
+                return new ErrorResponse($"Error deleting script '{relativePath}': {e.Message}");
             }
         }
 
@@ -999,24 +1011,24 @@ namespace MCPForUnity.Editor.Tools
             JObject options)
         {
             if (!File.Exists(fullPath))
-                return Response.Error($"Script not found at '{relativePath}'.");
+                return new ErrorResponse($"Script not found at '{relativePath}'.");
             // Refuse edits if the target is a symlink
             try
             {
                 var attrs = File.GetAttributes(fullPath);
                 if ((attrs & FileAttributes.ReparsePoint) != 0)
-                    return Response.Error("Refusing to edit a symlinked script path.");
+                    return new ErrorResponse("Refusing to edit a symlinked script path.");
             }
             catch
             {
                 // ignore failures checking attributes and proceed
             }
             if (edits == null || edits.Count == 0)
-                return Response.Error("No edits provided.");
+                return new ErrorResponse("No edits provided.");
 
             string original;
             try { original = File.ReadAllText(fullPath); }
-            catch (Exception ex) { return Response.Error($"Failed to read script: {ex.Message}"); }
+            catch (Exception ex) { return new ErrorResponse($"Failed to read script: {ex.Message}"); }
 
             string working = original;
 
@@ -1044,15 +1056,15 @@ namespace MCPForUnity.Editor.Tools
                                 string replacement = ExtractReplacement(op);
 
                                 if (string.IsNullOrWhiteSpace(className))
-                                    return Response.Error("replace_class requires 'className'.");
+                                    return new ErrorResponse("replace_class requires 'className'.");
                                 if (replacement == null)
-                                    return Response.Error("replace_class requires 'replacement' (inline or base64).");
+                                    return new ErrorResponse("replace_class requires 'replacement' (inline or base64).");
 
                                 if (!TryComputeClassSpan(working, className, ns, out var spanStart, out var spanLength, out var why))
-                                    return Response.Error($"replace_class failed: {why}");
+                                    return new ErrorResponse($"replace_class failed: {why}");
 
                                 if (!ValidateClassSnippet(replacement, className, out var vErr))
-                                    return Response.Error($"Replacement snippet invalid: {vErr}");
+                                    return new ErrorResponse($"Replacement snippet invalid: {vErr}");
 
                                 if (applySequentially)
                                 {
@@ -1071,10 +1083,10 @@ namespace MCPForUnity.Editor.Tools
                                 string className = op.Value<string>("className");
                                 string ns = op.Value<string>("namespace");
                                 if (string.IsNullOrWhiteSpace(className))
-                                    return Response.Error("delete_class requires 'className'.");
+                                    return new ErrorResponse("delete_class requires 'className'.");
 
                                 if (!TryComputeClassSpan(working, className, ns, out var s, out var l, out var why))
-                                    return Response.Error($"delete_class failed: {why}");
+                                    return new ErrorResponse($"delete_class failed: {why}");
 
                                 if (applySequentially)
                                 {
@@ -1098,12 +1110,12 @@ namespace MCPForUnity.Editor.Tools
                                 string parametersSignature = op.Value<string>("parametersSignature");
                                 string attributesContains = op.Value<string>("attributesContains");
 
-                                if (string.IsNullOrWhiteSpace(className)) return Response.Error("replace_method requires 'className'.");
-                                if (string.IsNullOrWhiteSpace(methodName)) return Response.Error("replace_method requires 'methodName'.");
-                                if (replacement == null) return Response.Error("replace_method requires 'replacement' (inline or base64).");
+                                if (string.IsNullOrWhiteSpace(className)) return new ErrorResponse("replace_method requires 'className'.");
+                                if (string.IsNullOrWhiteSpace(methodName)) return new ErrorResponse("replace_method requires 'methodName'.");
+                                if (replacement == null) return new ErrorResponse("replace_method requires 'replacement' (inline or base64).");
 
                                 if (!TryComputeClassSpan(working, className, ns, out var clsStart, out var clsLen, out var whyClass))
-                                    return Response.Error($"replace_method failed to locate class: {whyClass}");
+                                    return new ErrorResponse($"replace_method failed to locate class: {whyClass}");
 
                                 if (!TryComputeMethodSpan(working, clsStart, clsLen, methodName, returnType, parametersSignature, attributesContains, out var mStart, out var mLen, out var whyMethod))
                                 {
@@ -1112,7 +1124,7 @@ namespace MCPForUnity.Editor.Tools
                                         string.Equals(jo.Value<string>("methodName"), methodName, StringComparison.Ordinal) &&
                                         ((jo.Value<string>("mode") ?? jo.Value<string>("op") ?? string.Empty).ToLowerInvariant() == "insert_method"));
                                     string hint = hasDependentInsert && !applySequentially ? " Hint: This batch inserts this method. Use options.applyMode='sequential' or split into separate calls." : string.Empty;
-                                    return Response.Error($"replace_method failed: {whyMethod}.{hint}");
+                                    return new ErrorResponse($"replace_method failed: {whyMethod}.{hint}");
                                 }
 
                                 if (applySequentially)
@@ -1136,11 +1148,11 @@ namespace MCPForUnity.Editor.Tools
                                 string parametersSignature = op.Value<string>("parametersSignature");
                                 string attributesContains = op.Value<string>("attributesContains");
 
-                                if (string.IsNullOrWhiteSpace(className)) return Response.Error("delete_method requires 'className'.");
-                                if (string.IsNullOrWhiteSpace(methodName)) return Response.Error("delete_method requires 'methodName'.");
+                                if (string.IsNullOrWhiteSpace(className)) return new ErrorResponse("delete_method requires 'className'.");
+                                if (string.IsNullOrWhiteSpace(methodName)) return new ErrorResponse("delete_method requires 'methodName'.");
 
                                 if (!TryComputeClassSpan(working, className, ns, out var clsStart, out var clsLen, out var whyClass))
-                                    return Response.Error($"delete_method failed to locate class: {whyClass}");
+                                    return new ErrorResponse($"delete_method failed to locate class: {whyClass}");
 
                                 if (!TryComputeMethodSpan(working, clsStart, clsLen, methodName, returnType, parametersSignature, attributesContains, out var mStart, out var mLen, out var whyMethod))
                                 {
@@ -1149,7 +1161,7 @@ namespace MCPForUnity.Editor.Tools
                                         string.Equals(jo.Value<string>("methodName"), methodName, StringComparison.Ordinal) &&
                                         ((jo.Value<string>("mode") ?? jo.Value<string>("op") ?? string.Empty).ToLowerInvariant() == "insert_method"));
                                     string hint = hasDependentInsert && !applySequentially ? " Hint: This batch inserts this method. Use options.applyMode='sequential' or split into separate calls." : string.Empty;
-                                    return Response.Error($"delete_method failed: {whyMethod}.{hint}");
+                                    return new ErrorResponse($"delete_method failed: {whyMethod}.{hint}");
                                 }
 
                                 if (applySequentially)
@@ -1176,19 +1188,19 @@ namespace MCPForUnity.Editor.Tools
                                 string snippet = ExtractReplacement(op);
                                 // Harden: refuse empty replacement for inserts
                                 if (snippet == null || snippet.Trim().Length == 0)
-                                    return Response.Error("insert_method requires a non-empty 'replacement' text.");
+                                    return new ErrorResponse("insert_method requires a non-empty 'replacement' text.");
 
-                                if (string.IsNullOrWhiteSpace(className)) return Response.Error("insert_method requires 'className'.");
-                                if (snippet == null) return Response.Error("insert_method requires 'replacement' (inline or base64) containing a full method declaration.");
+                                if (string.IsNullOrWhiteSpace(className)) return new ErrorResponse("insert_method requires 'className'.");
+                                if (snippet == null) return new ErrorResponse("insert_method requires 'replacement' (inline or base64) containing a full method declaration.");
 
                                 if (!TryComputeClassSpan(working, className, ns, out var clsStart, out var clsLen, out var whyClass))
-                                    return Response.Error($"insert_method failed to locate class: {whyClass}");
+                                    return new ErrorResponse($"insert_method failed to locate class: {whyClass}");
 
                                 if (position == "after")
                                 {
-                                    if (string.IsNullOrEmpty(afterMethodName)) return Response.Error("insert_method with position='after' requires 'afterMethodName'.");
+                                    if (string.IsNullOrEmpty(afterMethodName)) return new ErrorResponse("insert_method with position='after' requires 'afterMethodName'.");
                                     if (!TryComputeMethodSpan(working, clsStart, clsLen, afterMethodName, afterReturnType, afterParameters, afterAttributesContains, out var aStart, out var aLen, out var whyAfter))
-                                        return Response.Error($"insert_method(after) failed to locate anchor method: {whyAfter}");
+                                        return new ErrorResponse($"insert_method(after) failed to locate anchor method: {whyAfter}");
                                     int insAt = aStart + aLen;
                                     string text = NormalizeNewlines("\n\n" + snippet.TrimEnd() + "\n");
                                     if (applySequentially)
@@ -1202,7 +1214,7 @@ namespace MCPForUnity.Editor.Tools
                                     }
                                 }
                                 else if (!TryFindClassInsertionPoint(working, clsStart, clsLen, position, out var insAt, out var whyIns))
-                                    return Response.Error($"insert_method failed: {whyIns}");
+                                    return new ErrorResponse($"insert_method failed: {whyIns}");
                                 else
                                 {
                                     string text = NormalizeNewlines("\n\n" + snippet.TrimEnd() + "\n");
@@ -1224,14 +1236,14 @@ namespace MCPForUnity.Editor.Tools
                                 string anchor = op.Value<string>("anchor");
                                 string position = (op.Value<string>("position") ?? "before").ToLowerInvariant();
                                 string text = op.Value<string>("text") ?? ExtractReplacement(op);
-                                if (string.IsNullOrWhiteSpace(anchor)) return Response.Error("anchor_insert requires 'anchor' (regex).");
-                                if (string.IsNullOrEmpty(text)) return Response.Error("anchor_insert requires non-empty 'text'.");
+                                if (string.IsNullOrWhiteSpace(anchor)) return new ErrorResponse("anchor_insert requires 'anchor' (regex).");
+                                if (string.IsNullOrEmpty(text)) return new ErrorResponse("anchor_insert requires non-empty 'text'.");
 
                                 try
                                 {
                                     var rx = new Regex(anchor, RegexOptions.Multiline, TimeSpan.FromSeconds(2));
                                     var m = rx.Match(working);
-                                    if (!m.Success) return Response.Error($"anchor_insert: anchor not found: {anchor}");
+                                    if (!m.Success) return new ErrorResponse($"anchor_insert: anchor not found: {anchor}");
                                     int insAt = position == "after" ? m.Index + m.Length : m.Index;
                                     string norm = NormalizeNewlines(text);
                                     if (!norm.EndsWith("\n"))
@@ -1261,7 +1273,7 @@ namespace MCPForUnity.Editor.Tools
                                 }
                                 catch (Exception ex)
                                 {
-                                    return Response.Error($"anchor_insert failed: {ex.Message}");
+                                    return new ErrorResponse($"anchor_insert failed: {ex.Message}");
                                 }
                                 break;
                             }
@@ -1269,12 +1281,12 @@ namespace MCPForUnity.Editor.Tools
                         case "anchor_delete":
                             {
                                 string anchor = op.Value<string>("anchor");
-                                if (string.IsNullOrWhiteSpace(anchor)) return Response.Error("anchor_delete requires 'anchor' (regex).");
+                                if (string.IsNullOrWhiteSpace(anchor)) return new ErrorResponse("anchor_delete requires 'anchor' (regex).");
                                 try
                                 {
                                     var rx = new Regex(anchor, RegexOptions.Multiline, TimeSpan.FromSeconds(2));
                                     var m = rx.Match(working);
-                                    if (!m.Success) return Response.Error($"anchor_delete: anchor not found: {anchor}");
+                                    if (!m.Success) return new ErrorResponse($"anchor_delete: anchor not found: {anchor}");
                                     int delAt = m.Index;
                                     int delLen = m.Length;
                                     if (applySequentially)
@@ -1289,7 +1301,7 @@ namespace MCPForUnity.Editor.Tools
                                 }
                                 catch (Exception ex)
                                 {
-                                    return Response.Error($"anchor_delete failed: {ex.Message}");
+                                    return new ErrorResponse($"anchor_delete failed: {ex.Message}");
                                 }
                                 break;
                             }
@@ -1298,12 +1310,12 @@ namespace MCPForUnity.Editor.Tools
                             {
                                 string anchor = op.Value<string>("anchor");
                                 string replacement = op.Value<string>("text") ?? op.Value<string>("replacement") ?? ExtractReplacement(op) ?? string.Empty;
-                                if (string.IsNullOrWhiteSpace(anchor)) return Response.Error("anchor_replace requires 'anchor' (regex).");
+                                if (string.IsNullOrWhiteSpace(anchor)) return new ErrorResponse("anchor_replace requires 'anchor' (regex).");
                                 try
                                 {
                                     var rx = new Regex(anchor, RegexOptions.Multiline, TimeSpan.FromSeconds(2));
                                     var m = rx.Match(working);
-                                    if (!m.Success) return Response.Error($"anchor_replace: anchor not found: {anchor}");
+                                    if (!m.Success) return new ErrorResponse($"anchor_replace: anchor not found: {anchor}");
                                     int at = m.Index;
                                     int len = m.Length;
                                     string norm = NormalizeNewlines(replacement);
@@ -1319,13 +1331,13 @@ namespace MCPForUnity.Editor.Tools
                                 }
                                 catch (Exception ex)
                                 {
-                                    return Response.Error($"anchor_replace failed: {ex.Message}");
+                                    return new ErrorResponse($"anchor_replace failed: {ex.Message}");
                                 }
                                 break;
                             }
 
                         default:
-                            return Response.Error($"Unknown edit mode: '{mode}'. Allowed: replace_class, delete_class, replace_method, delete_method, insert_method, anchor_insert, anchor_delete, anchor_replace.");
+                            return new ErrorResponse($"Unknown edit mode: '{mode}'. Allowed: replace_class, delete_class, replace_method, delete_method, insert_method, anchor_insert, anchor_delete, anchor_replace.");
                     }
                 }
 
@@ -1339,10 +1351,10 @@ namespace MCPForUnity.Editor.Tools
                             if (ordered[i].start + ordered[i].length > ordered[i - 1].start)
                             {
                                 var conflict = new[] { new { startA = ordered[i].start, endA = ordered[i].start + ordered[i].length, startB = ordered[i - 1].start, endB = ordered[i - 1].start + ordered[i - 1].length } };
-                                return Response.Error("overlap", new { status = "overlap", conflicts = conflict, hint = "Sort ranges descending by start and compute from the same snapshot." });
+                                return new ErrorResponse("overlap", new { status = "overlap", conflicts = conflict, hint = "Sort ranges descending by start and compute from the same snapshot." });
                             }
                         }
-                        return Response.Error("overlap", new { status = "overlap" });
+                        return new ErrorResponse("overlap", new { status = "overlap" });
                     }
 
                     foreach (var r in replacements.OrderByDescending(r => r.start))
@@ -1352,18 +1364,18 @@ namespace MCPForUnity.Editor.Tools
 
                 // Guard against structural imbalance before validation
                 if (!CheckBalancedDelimiters(working, out int lineBal, out char expectedBal))
-                    return Response.Error("unbalanced_braces", new { status = "unbalanced_braces", line = lineBal, expected = expectedBal.ToString() });
+                    return new ErrorResponse("unbalanced_braces", new { status = "unbalanced_braces", line = lineBal, expected = expectedBal.ToString() });
 
                 // No-op guard for structured edits: if text unchanged, return explicit no-op
                 if (string.Equals(working, original, StringComparison.Ordinal))
                 {
                     var sameSha = ComputeSha256(original);
-                    return Response.Success(
+                    return new SuccessResponse(
                         $"No-op: contents unchanged for '{relativePath}'.",
                         new
                         {
                             path = relativePath,
-                            uri = $"unity://path/{relativePath}",
+                            uri = $"mcpforunity://path/{relativePath}",
                             editsApplied = 0,
                             no_op = true,
                             sha256 = sameSha,
@@ -1391,9 +1403,9 @@ namespace MCPForUnity.Editor.Tools
                 }
                 catch { /* ignore option parsing issues */ }
                 if (!ValidateScriptSyntax(working, level, out var errors))
-                    return Response.Error("validation_failed", new { status = "validation_failed", diagnostics = errors ?? Array.Empty<string>() });
+                    return new ErrorResponse("validation_failed", new { status = "validation_failed", diagnostics = errors ?? Array.Empty<string>() });
                 else if (errors != null && errors.Length > 0)
-                    Debug.LogWarning($"Script validation warnings for {name}:\n" + string.Join("\n", errors));
+                    McpLog.Warn($"Script validation warnings for {name}:\n" + string.Join("\n", errors));
 
                 // Atomic write with backup; schedule refresh
                 // Decide refresh behavior
@@ -1424,12 +1436,12 @@ namespace MCPForUnity.Editor.Tools
                 }
 
                 var newSha = ComputeSha256(working);
-                var ok = Response.Success(
+                var ok = new SuccessResponse(
                     $"Applied {appliedCount} structured edit(s) to '{relativePath}'.",
                     new
                     {
                         path = relativePath,
-                        uri = $"unity://path/{relativePath}",
+                        uri = $"mcpforunity://path/{relativePath}",
                         editsApplied = appliedCount,
                         scheduledRefresh = !immediate,
                         sha256 = newSha
@@ -1449,7 +1461,7 @@ namespace MCPForUnity.Editor.Tools
             }
             catch (Exception ex)
             {
-                return Response.Error($"Edit failed: {ex.Message}");
+                return new ErrorResponse($"Edit failed: {ex.Message}");
             }
         }
 
@@ -1933,7 +1945,7 @@ namespace MCPForUnity.Editor.Tools
         /// </summary>
         private static ValidationLevel GetValidationLevelFromGUI()
         {
-            int savedLevel = EditorPrefs.GetInt("MCPForUnity.ValidationLevel", (int)ValidationLevel.Standard);
+            int savedLevel = EditorPrefs.GetInt(EditorPrefKeys.ValidationLevel, (int)ValidationLevel.Standard);
             return (ValidationLevel)Mathf.Clamp(savedLevel, 0, 3);
         }
 
@@ -2298,7 +2310,7 @@ namespace MCPForUnity.Editor.Tools
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogWarning($"Could not load UnityEngine assembly: {ex.Message}");
+                    McpLog.Warn($"Could not load UnityEngine assembly: {ex.Message}");
                 }
 
 #if UNITY_EDITOR
@@ -2308,7 +2320,7 @@ namespace MCPForUnity.Editor.Tools
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogWarning($"Could not load UnityEditor assembly: {ex.Message}");
+                    McpLog.Warn($"Could not load UnityEditor assembly: {ex.Message}");
                 }
 
                 // Get Unity project assemblies
@@ -2325,7 +2337,7 @@ namespace MCPForUnity.Editor.Tools
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogWarning($"Could not load Unity project assemblies: {ex.Message}");
+                    McpLog.Warn($"Could not load Unity project assemblies: {ex.Message}");
                 }
 #endif
 
@@ -2337,7 +2349,7 @@ namespace MCPForUnity.Editor.Tools
             }
             catch (Exception ex)
             {
-                Debug.LogError($"Failed to get compilation references: {ex.Message}");
+                McpLog.Error($"Failed to get compilation references: {ex.Message}");
                 return new System.Collections.Generic.List<MetadataReference>();
             }
         }
@@ -2500,7 +2512,7 @@ namespace MCPForUnity.Editor.Tools
 
         //     if (string.IsNullOrEmpty(contents))
         //     {
-        //         return Response.Error("Contents parameter is required for validation.");
+        //         return new ErrorResponse("Contents parameter is required for validation.");
         //     }
 
         //     // Parse validation level
@@ -2512,7 +2524,7 @@ namespace MCPForUnity.Editor.Tools
         //         case "comprehensive": level = ValidationLevel.Comprehensive; break;
         //         case "strict": level = ValidationLevel.Strict; break;
         //         default:
-        //             return Response.Error($"Invalid validation level: '{validationLevel}'. Valid levels are: basic, standard, comprehensive, strict.");
+        //             return new ErrorResponse($"Invalid validation level: '{validationLevel}'. Valid levels are: basic, standard, comprehensive, strict.");
         //     }
 
         //     // Perform validation
@@ -2536,11 +2548,11 @@ namespace MCPForUnity.Editor.Tools
 
         //     if (isValid)
         //     {
-        //         return Response.Success("Script validation completed successfully.", result);
+        //         return new SuccessResponse("Script validation completed successfully.", result);
         //     }
         //     else
         //     {
-        //         return Response.Error("Script validation failed.", result);
+        //         return new ErrorResponse("Script validation failed.", result);
         //     }
         // }
     }
@@ -2625,8 +2637,8 @@ namespace MCPForUnity.Editor.Tools
         {
             if (string.IsNullOrEmpty(p)) return p;
             p = p.Replace('\\', '/').Trim();
-            if (p.StartsWith("unity://path/", StringComparison.OrdinalIgnoreCase))
-                p = p.Substring("unity://path/".Length);
+            if (p.StartsWith("mcpforunity://path/", StringComparison.OrdinalIgnoreCase))
+                p = p.Substring("mcpforunity://path/".Length);
             while (p.StartsWith("Assets/Assets/", StringComparison.OrdinalIgnoreCase))
                 p = p.Substring("Assets/".Length);
             if (!p.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))

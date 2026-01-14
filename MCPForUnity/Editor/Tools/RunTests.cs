@@ -1,73 +1,126 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Editor.Resources.Tests;
 using MCPForUnity.Editor.Services;
 using Newtonsoft.Json.Linq;
+using UnityEditor.TestTools.TestRunner.Api;
 
 namespace MCPForUnity.Editor.Tools
 {
     /// <summary>
-    /// Executes Unity tests for a specified mode and returns detailed results.
+    /// Starts a Unity Test Runner run asynchronously and returns a job id immediately.
+    /// Use get_test_job(job_id) to poll status/results.
     /// </summary>
-    [McpForUnityTool("run_tests")]
+    [McpForUnityTool("run_tests", AutoRegister = false)]
     public static class RunTests
     {
-        private const int DefaultTimeoutSeconds = 600; // 10 minutes
-
-        public static async Task<object> HandleCommand(JObject @params)
+        public static Task<object> HandleCommand(JObject @params)
         {
-            string modeStr = @params?["mode"]?.ToString();
-            if (string.IsNullOrWhiteSpace(modeStr))
-            {
-                modeStr = "EditMode";
-            }
-
-            if (!ModeParser.TryParse(modeStr, out var parsedMode, out var parseError))
-            {
-                return Response.Error(parseError);
-            }
-
-            int timeoutSeconds = DefaultTimeoutSeconds;
             try
             {
-                var timeoutToken = @params?["timeoutSeconds"];
-                if (timeoutToken != null && int.TryParse(timeoutToken.ToString(), out var parsedTimeout) && parsedTimeout > 0)
+                string modeStr = @params?["mode"]?.ToString();
+                if (string.IsNullOrWhiteSpace(modeStr))
                 {
-                    timeoutSeconds = parsedTimeout;
+                    modeStr = "EditMode";
                 }
-            }
-            catch
-            {
-                // Preserve default timeout if parsing fails
-            }
 
-            var testService = MCPServiceLocator.Tests;
-            Task<TestRunResult> runTask;
-            try
-            {
-                runTask = testService.RunTestsAsync(parsedMode.Value);
+                if (!ModeParser.TryParse(modeStr, out var parsedMode, out var parseError))
+                {
+                    return Task.FromResult<object>(new ErrorResponse(parseError));
+                }
+
+                bool includeDetails = false;
+                bool includeFailedTests = false;
+                try
+                {
+                    var includeDetailsToken = @params?["includeDetails"];
+                    if (includeDetailsToken != null && bool.TryParse(includeDetailsToken.ToString(), out var parsedIncludeDetails))
+                    {
+                        includeDetails = parsedIncludeDetails;
+                    }
+
+                    var includeFailedTestsToken = @params?["includeFailedTests"];
+                    if (includeFailedTestsToken != null && bool.TryParse(includeFailedTestsToken.ToString(), out var parsedIncludeFailedTests))
+                    {
+                        includeFailedTests = parsedIncludeFailedTests;
+                    }
+                }
+                catch
+                {
+                    // ignore parse failures
+                }
+
+                var filterOptions = GetFilterOptions(@params);
+                string jobId = TestJobManager.StartJob(parsedMode.Value, filterOptions);
+
+                return Task.FromResult<object>(new SuccessResponse("Test job started.", new
+                {
+                    job_id = jobId,
+                    status = "running",
+                    mode = parsedMode.Value.ToString(),
+                    include_details = includeDetails,
+                    include_failed_tests = includeFailedTests
+                }));
             }
             catch (Exception ex)
             {
-                return Response.Error($"Failed to start test run: {ex.Message}");
+                // Normalize the already-running case to a stable error token.
+                if (ex.Message != null && ex.Message.IndexOf("already in progress", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return Task.FromResult<object>(new ErrorResponse("tests_running", new { reason = "tests_running", retry_after_ms = 5000 }));
+                }
+                return Task.FromResult<object>(new ErrorResponse($"Failed to start test job: {ex.Message}"));
             }
+        }
 
-            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(timeoutSeconds));
-            var completed = await Task.WhenAny(runTask, timeoutTask).ConfigureAwait(true);
-
-            if (completed != runTask)
+        private static TestFilterOptions GetFilterOptions(JObject @params)
+        {
+            if (@params == null)
             {
-                return Response.Error($"Test run timed out after {timeoutSeconds} seconds");
+                return null;
             }
 
-            var result = await runTask.ConfigureAwait(true);
+            string[] ParseStringArray(string key)
+            {
+                var token = @params[key];
+                if (token == null) return null;
+                if (token.Type == JTokenType.String)
+                {
+                    var value = token.ToString();
+                    return string.IsNullOrWhiteSpace(value) ? null : new[] { value };
+                }
+                if (token.Type == JTokenType.Array)
+                {
+                    var array = token as JArray;
+                    if (array == null || array.Count == 0) return null;
+                    var values = array
+                        .Values<string>()
+                        .Where(s => !string.IsNullOrWhiteSpace(s))
+                        .ToArray();
+                    return values.Length > 0 ? values : null;
+                }
+                return null;
+            }
 
-            string message =
-                $"{parsedMode.Value} tests completed: {result.Passed}/{result.Total} passed, {result.Failed} failed, {result.Skipped} skipped";
+            var testNames = ParseStringArray("testNames");
+            var groupNames = ParseStringArray("groupNames");
+            var categoryNames = ParseStringArray("categoryNames");
+            var assemblyNames = ParseStringArray("assemblyNames");
 
-            var data = result.ToSerializable(parsedMode.Value.ToString());
-            return Response.Success(message, data);
+            if (testNames == null && groupNames == null && categoryNames == null && assemblyNames == null)
+            {
+                return null;
+            }
+
+            return new TestFilterOptions
+            {
+                TestNames = testNames,
+                GroupNames = groupNames,
+                CategoryNames = categoryNames,
+                AssemblyNames = assemblyNames
+            };
         }
     }
 }

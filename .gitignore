@@ -16,8 +16,6 @@ build/
 dist/
 wheels/
 *.egg-info
-UnityMcpServer/**/*.meta
-UnityMcpServer.meta
 
 # Virtual environments
 .venv
@@ -36,8 +34,20 @@ CONTRIBUTING.md.meta
 # Unity test project lock files
 TestProjects/UnityMCPTests/Packages/packages-lock.json
 
+# UnityMCPTests stress-run artifacts (these are created by tests/tools and should never be committed)
+TestProjects/UnityMCPTests/Assets/Temp/
+
 # Backup artifacts
 *.backup
 *.backup.meta
 
 .wt-origin-main/
+
+# CI test reports (generated during test runs)
+reports/
+
+# Local Claude configs (not for repo)
+.claude/local/
+
+# Local testing harness
+scripts/local-test/

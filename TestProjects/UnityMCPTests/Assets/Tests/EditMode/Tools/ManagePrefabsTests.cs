@@ -5,6 +5,7 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using MCPForUnity.Editor.Tools.Prefabs;
+using static MCPForUnityTests.Editor.TestUtilities;
 
 namespace MCPForUnityTests.Editor.Tools
 {
@@ -23,16 +24,15 @@ namespace MCPForUnityTests.Editor.Tools
         public void TearDown()
         {
             StageUtility.GoToMainStage();
-        }
-
-        [OneTimeTearDown]
-        public void CleanupAll()
-        {
-            StageUtility.GoToMainStage();
+            
+            // Clean up temp directory after each test
             if (AssetDatabase.IsValidFolder(TempDirectory))
             {
                 AssetDatabase.DeleteAsset(TempDirectory);
             }
+            
+            // Clean up empty parent folders to avoid debris
+            CleanupEmptyParentFolders(TempDirectory);
         }
 
         [Test]
@@ -244,11 +244,6 @@ namespace MCPForUnityTests.Editor.Tools
             {
                 AssetDatabase.CreateFolder("Assets/Temp", "ManagePrefabsTests");
             }
-        }
-
-        private static JObject ToJObject(object result)
-        {
-            return result as JObject ?? JObject.FromObject(result);
         }
     }
 }

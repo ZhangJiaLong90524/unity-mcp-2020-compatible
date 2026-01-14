@@ -17,10 +17,10 @@ namespace MCPForUnity.Editor.Resources.Editor
             try
             {
                 var stage = PrefabStageUtility.GetCurrentPrefabStage();
-                
+
                 if (stage == null)
                 {
-                    return Response.Success("No prefab stage is currently open.", new { isOpen = false });
+                    return new SuccessResponse("No prefab stage is currently open.", new { isOpen = false });
                 }
 
                 var stageInfo = new
@@ -32,11 +32,11 @@ namespace MCPForUnity.Editor.Resources.Editor
                     isDirty = stage.scene.isDirty
                 };
 
-                return Response.Success("Prefab stage info retrieved.", stageInfo);
+                return new SuccessResponse("Prefab stage info retrieved.", stageInfo);
             }
             catch (Exception e)
             {
-                return Response.Error($"Error getting prefab stage info: {e.Message}");
+                return new ErrorResponse($"Error getting prefab stage info: {e.Message}");
             }
         }
     }

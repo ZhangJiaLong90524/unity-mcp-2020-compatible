@@ -13,7 +13,7 @@ To contribute or run tests, you need to install the development dependencies usi
 
 ```bash
 # Navigate to the server source directory
-cd MCPForUnity/UnityMcpServer~/src
+cd Server
 
 # Install the package in editable mode with dev dependencies
 uv pip install -e ".[dev]"
@@ -28,7 +28,7 @@ This installs:
 
 ```bash
 # From the server source directory
-cd MCPForUnity/UnityMcpServer~/src
+cd Server
 uv run pytest tests/ -v
 ```
 
@@ -36,7 +36,7 @@ Or from the repo root:
 
 ```bash
 # Using uv from the server directory
-cd MCPForUnity/UnityMcpServer~/src && uv run pytest tests/ -v
+cd Server && uv run pytest tests/ -v
 ```
 
 To run only integration tests:
@@ -54,16 +54,32 @@ uv run pytest tests/ -v -m unit
 ### ✅ Development Deployment Scripts
 
 Quick deployment and testing tools for MCP for Unity core changes.
+**Development Mode Toggle**: Built-in Unity editor development features -> Now operating as Advanced Setting
+**Hot Reload System**: Real-time code updates without Unity restarts  -> Roslyn Runtime_Compilation Custom Tools
+**Plugin Development Kit**: Tools for creating custom MCP for Unity extensions -> Custom Tools
 
 ### 🔄 Coming Soon
-
-- **Development Mode Toggle**: Built-in Unity editor development features
-- **Hot Reload System**: Real-time code updates without Unity restarts  
-- **Plugin Development Kit**: Tools for creating custom MCP for Unity extensions
 - **Automated Testing Suite**: Comprehensive testing framework for contributions
 - **Debug Dashboard**: Advanced debugging and monitoring tools
 
 ---
+
+## Advanced Settings (Editor Window)
+
+Use the MCP for Unity Editor window (Window > MCP for Unity) and open **Advanced Settings** inside the Settings tab to override tooling and deploy local code during development.
+
+![Advanced Settings](./images/advanced-setting.png)
+
+
+- **UV/UVX Path Override**: Point the UI to a specific `uv`/`uvx` executable (e.g., from a custom install) when PATH resolution is wrong. Clear to fall back to auto-discovery.
+- **Server Source Override**: Set a local folder or git URL for the Python server (`uvx --from <url> mcp-for-unity`). Clear to use the packaged default.
+- **Dev Mode (Force fresh server install)**: When enabled, generated `uvx` commands add `--no-cache --refresh` before launching. This is slower, but avoids accidentally running a stale cached build while iterating on `Server/`.
+- **Local Package Deployment**: Pick a local `MCPForUnity` folder (must contain `Editor/` and `Runtime/`) and click **Deploy to Project** to copy it over the currently installed package path (from `Packages/manifest.json` / Package Manager). A timestamped backup is stored under `Library/MCPForUnityDeployBackups`, and **Restore Last Backup** reverts the last deploy.
+
+Tips:
+- After deploy/restore, Unity will refresh scripts automatically; if in doubt, re-open the MCP window and confirm the target path label in Advanced Settings.
+- Keep the source and target distinct (don’t point the source at the already-installed `PackageCache` folder).
+- Use git ignored working folders for rapid iteration; the deploy flow copies only `Editor` and `Runtime`.
 
 ## Switching MCP package sources quickly
 
@@ -151,7 +167,42 @@ To find it reliably:
 3. Right click the package and choose "Show in Explorer"
 4. That opens the exact cache folder Unity is using for your project
 
-Note: In recent builds, the Python server sources are also bundled inside the package under `UnityMcpServer~/src`. This is handy for local testing or pointing MCP clients directly at the packaged server.
+Note: In recent builds, the Python server sources are also bundled inside the package under `Server`. This is handy for local testing or pointing MCP clients directly at the packaged server.
+
+## Payload sizing & paging defaults (recommended)
+
+Some Unity tool calls can return *very large* JSON payloads (deep hierarchies, components with full serialized properties). To keep MCP responses bounded and avoid Unity freezes/crashes, prefer **paged + summary-first** reads and fetch full properties only when needed.
+
+### `manage_scene(action="get_hierarchy")`
+
+- **Default behavior**: returns a **paged summary** of either root GameObjects (no `parent`) or direct children (`parent` specified). It does **not** inline full recursive subtrees.
+- **Paging params**:
+  - **`page_size`**: defaults to **50**, clamped to **1..500**
+  - **`cursor`**: defaults to **0**
+  - **`next_cursor`**: returned as a **string** when more results remain; `null` when complete
+- **Other safety knobs**:
+  - **`max_nodes`**: defaults to **1000**, clamped to **1..5000**
+  - **`include_transform`**: defaults to **false**
+
+### `manage_gameobject(action="get_components")`
+
+- **Default behavior**: returns **paged component metadata** only (`typeName`, `instanceID`).
+- **Paging params**:
+  - **`page_size`**: defaults to **25**, clamped to **1..200**
+  - **`cursor`**: defaults to **0**
+  - **`max_components`**: defaults to **50**, clamped to **1..500**
+  - **`next_cursor`**: returned as a **string** when more results remain; `null` when complete
+- **Properties-on-demand**:
+  - **`include_properties`** defaults to **false**
+  - When `include_properties=true`, the implementation enforces a conservative response-size budget (roughly **~250KB** of JSON text) and may return fewer than `page_size` items; use `next_cursor` to continue.
+
+### Practical defaults (what we recommend in prompts/tests)
+
+- **Hierarchy roots**: start with `page_size=50` and follow `next_cursor` (usually 1–2 calls for big scenes).
+- **Children**: page by `parent` with `page_size=10..50` (depending on expected breadth).
+- **Components**:
+  - Start with `include_properties=false` and `page_size=10..25`
+  - When you need full properties, keep `include_properties=true` with a **small** `page_size` (e.g. **3..10**) to bound peak payload sizes.
 
 ## MCP Bridge Stress Test
 
@@ -285,3 +336,14 @@ We provide a CI job to run a Natural Language Editing suite against the Unity te
 ### Windows uv path issues
 
 - On Windows, when testing GUI clients, prefer the WinGet Links `uv.exe`; if multiple `uv.exe` exist, use "Choose `uv` Install Location" to pin the Links shim.
+
+### Domain Reload Tests Stall When Unity is Backgrounded
+
+Tests that trigger script compilation mid-run (e.g., `DomainReloadResilienceTests`) may stall when Unity is not the active window. This is an OS-level limitation—macOS throttles background application main threads, preventing compilation from completing.
+
+**Workarounds:**
+- Run domain reload tests with Unity foregrounded
+- Run them first in the test suite (before backgrounding Unity)
+- Use the `[Explicit]` attribute to exclude them from default runs
+
+**Note:** The MCP workflow itself is unaffected—socket messages provide external stimulus that keeps Unity responsive even when backgrounded. This limitation only affects Unity's internal test coroutine waits.
